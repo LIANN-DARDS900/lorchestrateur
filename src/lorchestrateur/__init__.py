@@ -2,6 +2,7 @@
 
 from lorchestrateur.config import Settings
 from lorchestrateur.domain.content import ContentStrategy, MasterContent, SourceEvidence
+from lorchestrateur.domain.platform_content import PlatformContentRecord
 from lorchestrateur.domain.workflow import ContentJob, ContentJobState
 
 __all__ = [
@@ -9,7 +10,8 @@ __all__ = [
     "ContentJobState",
     "ContentStrategy",
     "MasterContent",
+    "PlatformContentRecord",
     "Settings",
     "SourceEvidence",
 ]
-__version__ = "0.2.0"
+__version__ = "0.3.0"

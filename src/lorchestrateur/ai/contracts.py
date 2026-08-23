@@ -20,6 +20,10 @@ class AITask(StrEnum):
 class AIOutputSchema(StrEnum):
     CONTENT_STRATEGY_V1 = "content_strategy_v1"
     MASTER_CONTENT_V1 = "master_content_v1"
+    BLOG_CONTENT_V1 = "blog_content_v1"
+    X_CONTENT_V1 = "x_content_v1"
+    INSTAGRAM_CONTENT_V1 = "instagram_content_v1"
+    FACEBOOK_CONTENT_V1 = "facebook_content_v1"
 
 
 @dataclass(frozen=True, slots=True)

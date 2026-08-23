@@ -7,8 +7,9 @@ Idea -> Research -> Reviewed Evidence -> Content Strategy
      -> Canonical Master Content -> Persist -> Ready for Adaptation
 ```
 
-The content job remains the orchestration root. Phase 2 stops in `adapting_platforms`; no platform
-variant or publishing operation occurs.
+The content job remains the orchestration root. Phase 2 stops in `adapting_platforms`, where Phase 3
+loads the persisted canonical artifact. Platform adaptation never rebuilds the factual foundation
+from the raw idea alone.
 
 ## Domain contracts
 
@@ -46,6 +47,8 @@ status, and error codes. It excludes prompts, source excerpts, strategy text, an
 
 - real Gemini, OpenRouter, or local-model adapters
 - automated research and crawling
-- platform-specific adaptation and content records
 - API/worker idempotency across external calls
-- human approval records, publishing, analytics, and frontend
+- publishing, analytics, and frontend
+
+The downstream platform contracts, validation, quality gates, revision semantics, and approval
+boundary are documented in [platform-adaptation.md](platform-adaptation.md).

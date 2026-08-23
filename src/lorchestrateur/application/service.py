@@ -18,7 +18,13 @@ from lorchestrateur.application.content_intelligence import (
     SourceAdditionOutcome,
     StrategyGenerationOutcome,
 )
+from lorchestrateur.application.platform_adaptation import (
+    PlatformAdaptationOutcome,
+    PlatformAdaptationPipeline,
+    PlatformEvaluationOutcome,
+)
 from lorchestrateur.domain.content import EvidenceStatus, SourceType
+from lorchestrateur.domain.platform_content import QualityPolicy
 from lorchestrateur.domain.validation import ValidationResult
 from lorchestrateur.domain.workflow import (
     ContentJob,
@@ -26,7 +32,10 @@ from lorchestrateur.domain.workflow import (
     StateMachine,
     utc_now,
 )
-from lorchestrateur.persistence.contracts import ContentIntelligenceRepository
+from lorchestrateur.persistence.contracts import (
+    ArtifactNotFoundError,
+    ContentIntelligenceRepository,
+)
 from lorchestrateur.platforms.contracts import PlatformContent
 from lorchestrateur.platforms.registry import PlatformRegistry
 
@@ -71,6 +80,7 @@ class OrchestrationService:
         platforms: PlatformRegistry,
         *,
         ai_router: AIRouter | None = None,
+        quality_policy: QualityPolicy | None = None,
         clock: Callable[[], datetime] = utc_now,
         id_factory: Callable[[], str] = lambda: str(uuid4()),
         timer: Callable[[], float] = perf_counter,
@@ -83,6 +93,16 @@ class OrchestrationService:
             repository,
             state_machine,
             ai_router=ai_router,
+            clock=clock,
+            id_factory=id_factory,
+            timer=timer,
+        )
+        self._platform_adaptation = PlatformAdaptationPipeline(
+            repository,
+            state_machine,
+            platforms,
+            ai_router=ai_router,
+            quality_policy=quality_policy,
             clock=clock,
             id_factory=id_factory,
             timer=timer,
@@ -143,6 +163,25 @@ class OrchestrationService:
 
     def generate_master_content(self, job_id: str) -> MasterContentGenerationOutcome:
         return self._content_intelligence.generate_master_content(job_id)
+
+    def adapt_platforms(
+        self, job_id: str, *, generation_attempt_id: str | None = None
+    ) -> PlatformAdaptationOutcome:
+        return self._platform_adaptation.adapt_platforms(
+            job_id, generation_attempt_id=generation_attempt_id
+        )
+
+    def evaluate_platform_adaptations(
+        self, job_id: str
+    ) -> PlatformEvaluationOutcome:
+        return self._platform_adaptation.evaluate_platforms(job_id)
+
+    def validate_platform_adaptations(
+        self, job_id: str
+    ) -> PlatformEvaluationOutcome:
+        """Named alias matching the deterministic validation stage."""
+
+        return self.evaluate_platform_adaptations(job_id)
 
     def transition(
         self,
@@ -213,6 +252,14 @@ class OrchestrationService:
         current = self._repository.get(job_id)
         if current.state is not ContentJobState.VALIDATING:
             raise ValueError("platform content can only be validated in the validating state")
+        try:
+            self._repository.get_master_content(job_id)
+        except ArtifactNotFoundError:
+            pass
+        else:
+            raise PlatformContentBatchError(
+                "jobs with persisted master content require durable platform adaptations"
+            )
 
         expected = set(current.target_platforms)
         provided = set(content_by_platform)
@@ -286,4 +333,3 @@ class OrchestrationService:
         updated, step = self._state_machine.fail(current, reason=reason)
         self._repository.save(updated, step)
         return updated
-

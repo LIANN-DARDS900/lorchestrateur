@@ -27,6 +27,16 @@ def _parse_provider_order(raw_value: str) -> tuple[str, ...]:
     return providers
 
 
+def _parse_quality_score(name: str, raw_value: str) -> int:
+    try:
+        value = int(raw_value.strip())
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be an integer") from exc
+    if not 0 <= value <= 100:
+        raise ConfigurationError(f"{name} must be between 0 and 100")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     """Non-secret application settings loaded from an explicit environment mapping."""
@@ -36,6 +46,7 @@ class Settings:
     database_url: str = "sqlite:///./data/lorchestrateur.db"
     allow_paid_ai: bool = False
     ai_provider_order: tuple[str, ...] = ("local", "gemini", "openrouter")
+    platform_min_quality_score: int = 80
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
@@ -60,5 +71,9 @@ class Settings:
             ),
             ai_provider_order=_parse_provider_order(
                 source.get("AI_PROVIDER_ORDER", "local,gemini,openrouter")
+            ),
+            platform_min_quality_score=_parse_quality_score(
+                "PLATFORM_MIN_QUALITY_SCORE",
+                source.get("PLATFORM_MIN_QUALITY_SCORE", "80"),
             ),
         )

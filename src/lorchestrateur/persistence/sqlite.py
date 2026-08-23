@@ -19,6 +19,12 @@ from lorchestrateur.domain.content import (
     SourceType,
     StrategyKeyMessage,
 )
+from lorchestrateur.domain.platform_content import (
+    PlatformContentRecord,
+    PlatformValidationStatus,
+    QualityBreakdown,
+)
+from lorchestrateur.domain.validation import ValidationIssue
 from lorchestrateur.domain.workflow import ContentJob, ContentJobState, JobStep
 from lorchestrateur.persistence.contracts import (
     ArtifactNotFoundError,
@@ -27,6 +33,8 @@ from lorchestrateur.persistence.contracts import (
     DuplicateJobError,
     JobNotFoundError,
 )
+from lorchestrateur.platforms.builtins import create_default_registry
+from lorchestrateur.platforms.registry import PlatformRegistry
 
 
 class UnsupportedDatabaseURLError(ValueError):
@@ -36,14 +44,26 @@ class UnsupportedDatabaseURLError(ValueError):
 class SQLiteContentJobRepository:
     """Local repository; callers depend on the repository protocol, not SQLite APIs."""
 
-    def __init__(self, database_path: str | Path, *, initialize: bool = True) -> None:
+    def __init__(
+        self,
+        database_path: str | Path,
+        *,
+        initialize: bool = True,
+        platform_registry: PlatformRegistry | None = None,
+    ) -> None:
         self._database_path = Path(database_path)
+        self._platform_registry = platform_registry or create_default_registry()
         self._database_path.parent.mkdir(parents=True, exist_ok=True)
         if initialize:
             self.initialize()
 
     @classmethod
-    def from_database_url(cls, database_url: str) -> SQLiteContentJobRepository:
+    def from_database_url(
+        cls,
+        database_url: str,
+        *,
+        platform_registry: PlatformRegistry | None = None,
+    ) -> SQLiteContentJobRepository:
         prefix = "sqlite:///"
         if not database_url.startswith(prefix):
             raise UnsupportedDatabaseURLError(
@@ -52,7 +72,7 @@ class SQLiteContentJobRepository:
         path = database_url.removeprefix(prefix)
         if not path:
             raise UnsupportedDatabaseURLError("SQLite database path cannot be empty")
-        return cls(path)
+        return cls(path, platform_registry=platform_registry)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -136,13 +156,38 @@ class SQLiteContentJobRepository:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS platform_contents (
+                    id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL REFERENCES content_jobs(id) ON DELETE CASCADE,
+                    master_content_id TEXT NOT NULL
+                        REFERENCES master_contents(id) ON DELETE CASCADE,
+                    platform TEXT NOT NULL,
+                    format TEXT NOT NULL,
+                    schema_version TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    generation_metadata TEXT NOT NULL,
+                    generation_attempt_id TEXT NOT NULL,
+                    validation_status TEXT NOT NULL,
+                    quality_score INTEGER,
+                    quality_breakdown TEXT,
+                    validation_issues TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(job_id, master_content_id, platform, revision),
+                    UNIQUE(job_id, master_content_id, platform, generation_attempt_id)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_job_steps_job_id
                     ON job_steps(job_id, sequence);
 
                 CREATE INDEX IF NOT EXISTS idx_sources_job_id
                     ON sources(job_id);
 
-                PRAGMA user_version = 2;
+                CREATE INDEX IF NOT EXISTS idx_platform_contents_job_platform
+                    ON platform_contents(job_id, platform, revision);
+
+                PRAGMA user_version = 3;
                 """
             )
 
@@ -335,6 +380,123 @@ class SQLiteContentJobRepository:
             )
         return self._row_to_master_content(row)
 
+    def save_platform_content_with_checkpoint(
+        self, content: PlatformContentRecord, job: ContentJob, step: JobStep
+    ) -> None:
+        if content.job_id != job.id:
+            raise ValueError("platform content and checkpoint belong to different jobs")
+        try:
+            with self._connect() as connection:
+                self._update_job(connection, job, step)
+                connection.execute(
+                    """
+                    INSERT INTO platform_contents (
+                        id, job_id, master_content_id, platform, format, schema_version,
+                        payload, generation_metadata, generation_attempt_id,
+                        validation_status, quality_score, quality_breakdown,
+                        validation_issues, revision, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    self._platform_content_values(content),
+                )
+                self._insert_step(connection, step)
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateArtifactError(
+                "platform content already exists for this revision or generation attempt"
+            ) from exc
+
+    def get_platform_content(self, content_id: str) -> PlatformContentRecord:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM platform_contents WHERE id = ?", (content_id,)
+            ).fetchone()
+        if row is None:
+            raise ArtifactNotFoundError(f"platform content not found: {content_id}")
+        return self._row_to_platform_content(row)
+
+    def list_platform_contents(
+        self, job_id: str, *, platform: str | None = None
+    ) -> tuple[PlatformContentRecord, ...]:
+        self.get(job_id)
+        with self._connect() as connection:
+            if platform is None:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM platform_contents
+                    WHERE job_id = ? ORDER BY platform, revision, id
+                    """,
+                    (job_id,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM platform_contents
+                    WHERE job_id = ? AND platform = ?
+                    ORDER BY revision, id
+                    """,
+                    (job_id, platform.strip().lower()),
+                ).fetchall()
+        return tuple(self._row_to_platform_content(row) for row in rows)
+
+    def get_platform_content_by_attempt(
+        self,
+        job_id: str,
+        master_content_id: str,
+        platform: str,
+        generation_attempt_id: str,
+    ) -> PlatformContentRecord | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM platform_contents
+                WHERE job_id = ? AND master_content_id = ? AND platform = ?
+                    AND generation_attempt_id = ?
+                """,
+                (
+                    job_id,
+                    master_content_id,
+                    platform.strip().lower(),
+                    generation_attempt_id,
+                ),
+            ).fetchone()
+        return None if row is None else self._row_to_platform_content(row)
+
+    def save_platform_evaluations_with_checkpoint(
+        self,
+        contents: tuple[PlatformContentRecord, ...],
+        job: ContentJob,
+        step: JobStep,
+    ) -> None:
+        with self._connect() as connection:
+            self._update_job(connection, job, step)
+            for content in contents:
+                cursor = connection.execute(
+                    """
+                    UPDATE platform_contents SET
+                        validation_status = ?, quality_score = ?, quality_breakdown = ?,
+                        validation_issues = ?, updated_at = ?
+                    WHERE id = ? AND job_id = ? AND master_content_id = ?
+                        AND platform = ? AND revision = ?
+                    """,
+                    (
+                        content.validation_status.value,
+                        content.quality_score,
+                        self._quality_breakdown_to_json(content.quality_breakdown),
+                        self._validation_issues_to_json(content.validation_issues),
+                        content.updated_at.isoformat(),
+                        content.id,
+                        content.job_id,
+                        content.master_content_id,
+                        content.platform,
+                        content.revision,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise ArtifactNotFoundError(
+                        f"platform content not found or identity changed: {content.id}"
+                    )
+            self._insert_step(connection, step)
+
     @staticmethod
     def _update_job(
         connection: sqlite3.Connection, job: ContentJob, step: JobStep
@@ -404,6 +566,47 @@ class SQLiteContentJobRepository:
                 "generated_at": metadata.generated_at.isoformat(),
                 "duration_ms": metadata.duration_ms,
             },
+            sort_keys=True,
+        )
+
+    @classmethod
+    def _platform_content_values(
+        cls, content: PlatformContentRecord
+    ) -> tuple[object, ...]:
+        return (
+            content.id,
+            content.job_id,
+            content.master_content_id,
+            content.platform,
+            content.format,
+            content.schema_version,
+            json.dumps(dict(content.payload.to_mapping()), sort_keys=True),
+            cls._generation_metadata_to_json(content.generation_metadata),
+            content.generation_attempt_id,
+            content.validation_status.value,
+            content.quality_score,
+            cls._quality_breakdown_to_json(content.quality_breakdown),
+            cls._validation_issues_to_json(content.validation_issues),
+            content.revision,
+            content.created_at.isoformat(),
+            content.updated_at.isoformat(),
+        )
+
+    @staticmethod
+    def _quality_breakdown_to_json(breakdown: QualityBreakdown | None) -> str | None:
+        if breakdown is None:
+            return None
+        return json.dumps(dict(breakdown.to_mapping()), sort_keys=True)
+
+    @staticmethod
+    def _validation_issues_to_json(
+        issues: tuple[ValidationIssue, ...],
+    ) -> str:
+        return json.dumps(
+            [
+                {"code": issue.code, "message": issue.message, "field": issue.field}
+                for issue in issues
+            ],
             sort_keys=True,
         )
 
@@ -505,6 +708,54 @@ class SQLiteContentJobRepository:
             generation_metadata=cls._generation_metadata_from_json(
                 row["generation_metadata"]
             ),
+        )
+
+    def _row_to_platform_content(self, row: sqlite3.Row) -> PlatformContentRecord:
+        metadata = self._generation_metadata_from_json(row["generation_metadata"])
+        if metadata is None:
+            raise ValueError("platform content generation metadata is missing")
+        raw_breakdown = (
+            json.loads(row["quality_breakdown"])
+            if row["quality_breakdown"] is not None
+            else None
+        )
+        breakdown = (
+            QualityBreakdown(
+                structure=raw_breakdown["structure"],
+                completeness=raw_breakdown["completeness"],
+                platform_fit=raw_breakdown["platform_fit"],
+                evidence_integrity=raw_breakdown["evidence_integrity"],
+                content_hygiene=raw_breakdown["content_hygiene"],
+            )
+            if raw_breakdown is not None
+            else None
+        )
+        return PlatformContentRecord(
+            id=row["id"],
+            job_id=row["job_id"],
+            master_content_id=row["master_content_id"],
+            platform=row["platform"],
+            format=row["format"],
+            schema_version=row["schema_version"],
+            payload=self._platform_registry.parse_payload(
+                row["platform"], json.loads(row["payload"])
+            ),
+            generation_metadata=metadata,
+            generation_attempt_id=row["generation_attempt_id"],
+            validation_status=PlatformValidationStatus(row["validation_status"]),
+            quality_score=row["quality_score"],
+            quality_breakdown=breakdown,
+            validation_issues=tuple(
+                ValidationIssue(
+                    code=item["code"],
+                    message=item["message"],
+                    field=item.get("field"),
+                )
+                for item in json.loads(row["validation_issues"])
+            ),
+            revision=row["revision"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
         )
 
     @staticmethod

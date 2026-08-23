@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from lorchestrateur.domain.content import ContentStrategy, MasterContent, SourceEvidence
+from lorchestrateur.domain.platform_content import PlatformContentRecord
 from lorchestrateur.domain.workflow import ContentJob, JobStep
 
 
@@ -58,3 +59,28 @@ class ContentIntelligenceRepository(ContentJobRepository, Protocol):
     ) -> None: ...
 
     def get_master_content(self, job_id: str) -> MasterContent: ...
+
+    def save_platform_content_with_checkpoint(
+        self, content: PlatformContentRecord, job: ContentJob, step: JobStep
+    ) -> None: ...
+
+    def get_platform_content(self, content_id: str) -> PlatformContentRecord: ...
+
+    def list_platform_contents(
+        self, job_id: str, *, platform: str | None = None
+    ) -> tuple[PlatformContentRecord, ...]: ...
+
+    def get_platform_content_by_attempt(
+        self,
+        job_id: str,
+        master_content_id: str,
+        platform: str,
+        generation_attempt_id: str,
+    ) -> PlatformContentRecord | None: ...
+
+    def save_platform_evaluations_with_checkpoint(
+        self,
+        contents: tuple[PlatformContentRecord, ...],
+        job: ContentJob,
+        step: JobStep,
+    ) -> None: ...

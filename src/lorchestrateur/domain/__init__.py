@@ -16,6 +16,12 @@ from lorchestrateur.domain.content_validation import (
     validate_source,
     validate_strategy,
 )
+from lorchestrateur.domain.platform_content import (
+    PlatformContentRecord,
+    PlatformValidationStatus,
+    QualityBreakdown,
+    QualityPolicy,
+)
 from lorchestrateur.domain.validation import ValidationIssue, ValidationResult
 from lorchestrateur.domain.workflow import (
     ContentJob,
@@ -34,6 +40,10 @@ __all__ = [
     "GenerationMetadata",
     "JobStep",
     "MasterContent",
+    "PlatformContentRecord",
+    "PlatformValidationStatus",
+    "QualityBreakdown",
+    "QualityPolicy",
     "SourceEvidence",
     "SourceType",
     "StateMachine",

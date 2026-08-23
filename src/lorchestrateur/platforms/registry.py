@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from typing import Any
 
+from lorchestrateur.domain.platform_content import PlatformPayload
 from lorchestrateur.domain.validation import ValidationResult
 from lorchestrateur.platforms.contracts import Platform, PlatformContent
 
@@ -41,6 +43,11 @@ class PlatformRegistry:
 
     def validate(self, content: PlatformContent) -> ValidationResult:
         return self.get(content.platform).validate(content)
+
+    def parse_payload(
+        self, platform: str, payload: Mapping[str, Any]
+    ) -> PlatformPayload:
+        return self.get(platform).parse_payload(payload)
 
     def keys(self) -> tuple[str, ...]:
         return tuple(self._platforms)
