@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#17243a">
+  <title>{% block title %}L’Orchestrateur{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <script defer src="{{ url_for('static', filename='app.js') }}"></script>
+</head>
+<body>
+  <a class="skip-link" href="#contenu">Aller au contenu</a>
+  <div class="app-shell">
+    <header class="mobile-header">
+      <a class="mobile-brand" href="{{ url_for('web.dashboard') }}">L’Orchestrateur</a>
+      {% if demo_mode %}<span class="tag">Démo</span>{% endif %}
+    </header>
+    <aside class="sidebar" aria-label="Navigation principale">
+      <a class="brand" href="{{ url_for('web.dashboard') }}" aria-label="L’Orchestrateur, accueil">
+        <span class="brand-mark" aria-hidden="true">LO</span>
+        <span><strong>L’Orchestrateur</strong><small>Content Orchestration Platform</small></span>
+      </a>
+      {% if demo_mode %}
+        <div class="demo-flag"><span aria-hidden="true">●</span> Mode démonstration</div>
+      {% endif %}
+      <nav class="nav-list">
+        <a href="{{ url_for('web.dashboard') }}" class="{{ 'active' if request.endpoint == 'web.dashboard' }}">Tableau de bord</a>
+        <a href="{{ url_for('web.content_list') }}" class="{{ 'active' if request.endpoint in ['web.content_list', 'web.job_workspace'] }}">Contenus</a>
+        <a href="{{ url_for('web.new_content') }}" class="{{ 'active' if request.endpoint == 'web.new_content' }}">Nouveau contenu</a>
+        <a href="{{ url_for('web.review_queue') }}" class="{{ 'active' if request.endpoint == 'web.review_queue' }}">Revue</a>
+        <span class="nav-separator" aria-hidden="true"></span>
+        <a href="{{ url_for('web.providers') }}" class="{{ 'active' if request.endpoint == 'web.providers' }}">Fournisseurs IA</a>
+        <a href="{{ url_for('web.settings_page') }}" class="{{ 'active' if request.endpoint == 'web.settings_page' }}">Paramètres</a>
+      </nav>
+      <div class="sidebar-foot">
+        <span class="governance-dot" aria-hidden="true"></span>
+        <span>Gouvernance humaine active</span>
+      </div>
+    </aside>
+    <div class="page-column">
+      <main id="contenu" class="page-content" tabindex="-1">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <div class="flash-stack" aria-live="polite">
+              {% for category, message in messages %}
+                <div class="flash flash-{{ category }}">{{ message }}</div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+</body>
+</html>

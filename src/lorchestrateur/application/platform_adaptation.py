@@ -90,7 +90,11 @@ class PlatformAdaptationPipeline:
         return self._quality_policy
 
     def adapt_platforms(
-        self, job_id: str, *, generation_attempt_id: str | None = None
+        self,
+        job_id: str,
+        *,
+        generation_attempt_id: str | None = None,
+        human_guidance: str | None = None,
     ) -> PlatformAdaptationOutcome:
         current = self._repository.get(job_id)
         self._require_state(current, ContentJobState.ADAPTING_PLATFORMS, "adapt platform content")
@@ -121,13 +125,18 @@ class PlatformAdaptationPipeline:
                 current.repair_attempts > 0
                 and previous is not None
                 and previous.is_approval_ready(self._quality_policy)
+                and not human_guidance
             ):
                 contents[platform_key] = previous
                 reused.append(platform_key)
                 continue
 
             revision = 1 if previous is None else previous.revision + 1
-            repair = self._repair_context(previous) if current.repair_attempts else None
+            repair = (
+                self._repair_context(previous, human_guidance=human_guidance)
+                if current.repair_attempts
+                else None
+            )
             request = platform.build_request(
                 PlatformAdaptationContext(
                     job=current,
@@ -455,9 +464,14 @@ class PlatformAdaptationPipeline:
     @staticmethod
     def _repair_context(
         previous: PlatformContentRecord | None,
+        *,
+        human_guidance: str | None = None,
     ) -> RepairContext:
         if previous is None:
-            return RepairContext(issue_codes=("missing_platform_content",))
+            return RepairContext(
+                issue_codes=("missing_platform_content",),
+                human_guidance=human_guidance,
+            )
         issue_codes = tuple(issue.code for issue in previous.validation_issues)
         if (
             previous.quality_score is not None
@@ -473,6 +487,7 @@ class PlatformAdaptationPipeline:
                 if previous.quality_breakdown is not None
                 else None
             ),
+            human_guidance=human_guidance,
         )
 
     @staticmethod

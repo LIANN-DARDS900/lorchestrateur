@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Paramètres · L’Orchestrateur{% endblock %}
+{% block content %}
+<div class="page-heading"><p class="eyebrow">Configuration sûre</p><h1>Paramètres</h1><p>Les paramètres sensibles restent gérés dans l’environnement du serveur.</p></div>
+<section class="settings-grid">
+  <article class="panel setting-card"><span class="card-label">Seuil qualité</span><strong>{{ quality_threshold }} / 100</strong><p>Score minimum requis après validation déterministe pour accéder à l’approbation.</p></article>
+  <article class="panel setting-card"><span class="card-label">Mode IA</span><strong>{{ 'Démonstration' if app_ai_mode == 'demo' else 'Fournisseurs réels' }}</strong><p>Le changement de mode se fait par configuration, sans logique fournisseur dans l’interface.</p></article>
+  <article class="panel setting-card"><span class="card-label">Persistance</span><strong>{{ database_kind }}</strong><p>Les workflows et artefacts sont conservés dans le dépôt applicatif existant.</p></article>
+</section>
+<div class="notice"><strong>Identifiants gérés par l’environnement</strong><span>Les clés Gemini et OpenRouter ne sont jamais saisies ni affichées dans cette interface.</span></div>
+{% endblock %}

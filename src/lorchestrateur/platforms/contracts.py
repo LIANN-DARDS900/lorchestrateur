@@ -50,6 +50,7 @@ class RepairContext:
     issue_codes: tuple[str, ...]
     quality_score: int | None = None
     quality_breakdown: Mapping[str, int] | None = None
+    human_guidance: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +211,8 @@ def adaptation_context_mapping(
             "quality_score": context.repair.quality_score,
             "quality_breakdown": dict(context.repair.quality_breakdown or {}),
         }
+        if context.repair.human_guidance:
+            result["repair"]["human_guidance"] = context.repair.human_guidance
     return result
 
 

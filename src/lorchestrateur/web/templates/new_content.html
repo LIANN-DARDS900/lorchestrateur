@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Nouveau contenu · L’Orchestrateur{% endblock %}
+{% block content %}
+<div class="page-heading narrow-heading"><p class="eyebrow">Nouveau workflow</p><h1>Créer un contenu</h1><p>Définissez l’idée stratégique et les canaux cibles. Les sources seront ajoutées avant toute génération.</p></div>
+{% if errors %}
+  <div class="error-summary" role="alert" aria-labelledby="form-errors"><h2 id="form-errors">Le formulaire doit être corrigé</h2><ul>{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul></div>
+{% endif %}
+<form class="form-card narrow-card" method="post" novalidate>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="form-section">
+    <span class="step-number" aria-hidden="true">01</span>
+    <div><h2>Idée stratégique</h2><p>Décrivez clairement le sujet, l’enjeu ou l’expertise à transformer.</p></div>
+  </div>
+  <label for="idea">Idée de contenu <span aria-hidden="true">*</span></label>
+  <textarea id="idea" name="idea" rows="6" required minlength="10" aria-describedby="idea-help">{{ form.idea }}</textarea>
+  <p id="idea-help" class="field-help">Le moteur construira ensuite la stratégie à partir des sources que vous autorisez.</p>
+
+  <div class="form-section section-spaced">
+    <span class="step-number" aria-hidden="true">02</span>
+    <div><h2>Canaux cibles</h2><p>Chaque canal recevra une adaptation structurée et validée séparément.</p></div>
+  </div>
+  <fieldset>
+    <legend>Sélectionnez au moins un canal <span aria-hidden="true">*</span></legend>
+    <div class="platform-picker">
+      {% for key, label in platforms.items() %}
+        <label class="platform-option"><input type="checkbox" name="platforms" value="{{ key }}" {{ 'checked' if key in form.platforms }}><span><strong>{{ label }}</strong><small>{% if key == 'blog' %}Article structuré et SEO sobre{% elif key == 'x' %}Publication courte ou fil{% elif key == 'instagram' %}Carrousel ou concept créatif{% else %}Publication contextuelle{% endif %}</small></span></label>
+      {% endfor %}
+    </div>
+  </fieldset>
+  <div class="form-actions"><a class="button button-secondary" href="{{ url_for('web.dashboard') }}">Annuler</a><button class="button button-primary" type="submit">Continuer vers les sources</button></div>
+</form>
+{% endblock %}

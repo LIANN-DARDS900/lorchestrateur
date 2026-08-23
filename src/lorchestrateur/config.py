@@ -93,6 +93,10 @@ class Settings:
     allow_paid_ai: bool = False
     ai_provider_order: tuple[str, ...] = ("local", "gemini", "openrouter")
     platform_min_quality_score: int = 80
+    app_ai_mode: str = "demo"
+    web_secret_key: str | None = field(default=None, repr=False)
+    web_host: str = "127.0.0.1"
+    web_port: int = 5000
     gemini_api_key: str | None = field(default=None, repr=False)
     gemini_model: str = ""
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
@@ -121,6 +125,18 @@ class Settings:
             raise ConfigurationError("APP_ENV cannot be empty")
         if not database_url:
             raise ConfigurationError("DATABASE_URL cannot be empty")
+        app_ai_mode = source.get("APP_AI_MODE", "demo").strip().lower()
+        if app_ai_mode not in {"demo", "real"}:
+            raise ConfigurationError("APP_AI_MODE must be demo or real")
+        web_host = source.get("WEB_HOST", "127.0.0.1").strip()
+        if not web_host:
+            raise ConfigurationError("WEB_HOST cannot be empty")
+        try:
+            web_port = int(source.get("WEB_PORT", "5000").strip())
+        except ValueError as exc:
+            raise ConfigurationError("WEB_PORT must be an integer") from exc
+        if not 1 <= web_port <= 65535:
+            raise ConfigurationError("WEB_PORT must be between 1 and 65535")
 
         return cls(
             app_env=app_env,
@@ -136,6 +152,10 @@ class Settings:
                 "PLATFORM_MIN_QUALITY_SCORE",
                 source.get("PLATFORM_MIN_QUALITY_SCORE", "80"),
             ),
+            app_ai_mode=app_ai_mode,
+            web_secret_key=_optional_value(source.get("WEB_SECRET_KEY")),
+            web_host=web_host,
+            web_port=web_port,
             gemini_api_key=_optional_value(source.get("GEMINI_API_KEY")),
             gemini_model=source.get("GEMINI_MODEL", "").strip(),
             gemini_base_url=_parse_base_url(

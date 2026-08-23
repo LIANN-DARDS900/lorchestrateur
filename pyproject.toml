@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lorchestrateur"
-version = "0.4.0"
-description = "Evidence-aware, deterministic-first content orchestration"
+version = "0.5.0"
+description = "Governed, evidence-aware multi-channel content orchestration"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "L'Orchestrateur contributors" }]
@@ -15,7 +15,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-dependencies = []
+dependencies = ["Flask>=3.1,<4"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

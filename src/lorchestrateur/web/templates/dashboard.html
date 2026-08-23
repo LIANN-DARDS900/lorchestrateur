@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Tableau de bord · L’Orchestrateur{% endblock %}
+{% block content %}
+<div class="page-heading heading-with-action">
+  <div>
+    <p class="eyebrow">Vue d’ensemble</p>
+    <h1>Tableau de bord</h1>
+    <p>Pilotez vos workflows de contenu, de l’idée stratégique jusqu’à l’approbation humaine.</p>
+  </div>
+  <a class="button button-primary" href="{{ url_for('web.new_content') }}">Créer un contenu</a>
+</div>
+
+<section class="stats-grid" aria-label="Indicateurs des workflows">
+  <article class="stat-card"><span>Total</span><strong>{{ dashboard.total }}</strong><small>workflows de contenu</small></article>
+  <article class="stat-card"><span>En cours</span><strong>{{ dashboard.processing }}</strong><small>orchestration active</small></article>
+  <article class="stat-card"><span>À approuver</span><strong>{{ dashboard.awaiting }}</strong><small>revue humaine requise</small></article>
+  <article class="stat-card"><span>Approuvés</span><strong>{{ dashboard.approved }}</strong><small>contenus gouvernés</small></article>
+  <article class="stat-card"><span>Attention</span><strong>{{ dashboard.attention }}</strong><small>en pause ou en échec</small></article>
+</section>
+
+<section class="panel">
+  <div class="panel-heading">
+    <div><p class="eyebrow">Activité récente</p><h2>Derniers contenus</h2></div>
+    {% if dashboard.recent %}<a class="text-link" href="{{ url_for('web.content_list') }}">Voir tous les contenus</a>{% endif %}
+  </div>
+  {% if dashboard.recent %}
+    <div class="job-list">
+      {% for job in dashboard.recent %}
+        <a class="job-row" href="{{ url_for('web.job_workspace', job_id=job.id) }}">
+          <span class="job-main"><strong>{{ job.idea }}</strong><small>{{ job.created_at }} · {{ job.platforms|join(' · ') }}</small></span>
+          <span class="status status-{{ job.status_tone }}">{{ job.status }}</span>
+          <span class="row-arrow" aria-hidden="true">→</span>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <span class="empty-symbol" aria-hidden="true">◎</span>
+      <h3>Aucun workflow de contenu</h3>
+      <p>Transformez votre première idée stratégique en contenus coordonnés et adaptés à chaque canal.</p>
+      <a class="button button-primary" href="{{ url_for('web.new_content') }}">Créer mon premier contenu</a>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

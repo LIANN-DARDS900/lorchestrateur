@@ -165,10 +165,16 @@ class OrchestrationService:
         return self._content_intelligence.generate_master_content(job_id)
 
     def adapt_platforms(
-        self, job_id: str, *, generation_attempt_id: str | None = None
+        self,
+        job_id: str,
+        *,
+        generation_attempt_id: str | None = None,
+        human_guidance: str | None = None,
     ) -> PlatformAdaptationOutcome:
         return self._platform_adaptation.adapt_platforms(
-            job_id, generation_attempt_id=generation_attempt_id
+            job_id,
+            generation_attempt_id=generation_attempt_id,
+            human_guidance=human_guidance,
         )
 
     def evaluate_platform_adaptations(
@@ -319,6 +325,22 @@ class OrchestrationService:
             event="human_approval_recorded",
             details={"approved_by": actor},
         )
+
+    def request_changes(
+        self,
+        job_id: str,
+        *,
+        requested_by: str,
+        reason: str,
+    ) -> ContentJob:
+        current = self._repository.get(job_id)
+        updated, step = self._state_machine.request_human_revision(
+            current,
+            requested_by=requested_by,
+            reason=reason,
+        )
+        self._repository.save(updated, step)
+        return updated
 
     def pause(self, job_id: str, *, reason: str) -> ContentJob:
         current = self._repository.get(job_id)

@@ -1,0 +1,29 @@
+{% macro render_platform(item) %}
+<article id="platform-{{ item.platform }}" class="panel platform-panel platform-{{ item.platform }}">
+  <div class="platform-header">
+    <div><span class="platform-kicker">Adaptation {{ item.label }}</span><h2>{{ item.label }}</h2></div>
+    <div class="platform-meta"><span class="tag">Révision {{ item.revision }}</span><span class="status {{ 'status-success' if item.quality_passed else 'status-danger' }}">{{ item.quality_score if item.quality_score is not none else '—' }}/100</span></div>
+  </div>
+  {% set content = item.content %}
+  {% if content.kind == 'blog' %}
+    <div class="blog-preview">
+      <div class="preview-label">Aperçu éditorial · Non publié</div>
+      <h3>{{ content.title }}</h3><p class="lead">{{ content.excerpt }}</p><p>{{ content.introduction }}</p>
+      {% for section in content.sections %}<section><h4>{{ section.heading }}</h4><p>{{ section.body }}</p></section>{% endfor %}
+      <p>{{ content.conclusion }}</p>{% if content.cta %}<p class="content-cta">{{ content.cta }}</p>{% endif %}
+      <div class="seo-box"><strong>Métadonnées de recherche</strong><dl><div><dt>Slug proposé</dt><dd>{{ content.slug }}</dd></div><div><dt>Titre SEO</dt><dd>{{ content.seo_title }}</dd></div><div><dt>Méta-description</dt><dd>{{ content.meta_description }}</dd></div></dl></div>
+    </div>
+  {% elif content.kind == 'x' %}
+    <div class="x-preview"><div class="preview-label">Aperçu X · Non publié</div><p class="hook">{{ content.opening_hook }}</p>{% for post in content.posts %}<article class="x-post"><div class="x-avatar" aria-hidden="true">LO</div><div><div class="social-name"><strong>L’Orchestrateur</strong><span>@orchestrateur · {{ post.order }}/{{ content.posts|length }}</span></div><p>{{ post.text }}</p><small class="char-count">{{ post.characters }} / 280 caractères</small></div></article>{% endfor %}{% if content.cta %}<p class="content-cta">{{ content.cta }}</p>{% endif %}</div>
+  {% elif content.kind == 'instagram_carousel' %}
+    <div class="preview-label">Concept de carrousel · Aucun média généré</div><p class="hook">{{ content.hook }}</p><div class="slide-grid">{% for slide in content.slides %}<article class="slide-card"><span>{{ '%02d'|format(slide.order) }}</span><h3>{{ slide.heading }}</h3><p>{{ slide.body }}</p></article>{% endfor %}</div><div class="caption-box"><strong>Légende</strong><p>{{ content.caption }}</p>{% if content.cta %}<p class="content-cta">{{ content.cta }}</p>{% endif %}</div>
+  {% elif content.kind == 'instagram_reel' %}
+    <div class="preview-label">Concept de Reel · Aucune vidéo générée</div><p class="hook">{{ content.hook }}</p><ol class="beat-list">{% for beat in content.beats %}<li><span>{{ beat.order }}</span><div><strong>{{ beat.scene }}</strong><p>{{ beat.message }}</p></div></li>{% endfor %}</ol><div class="caption-box"><strong>Légende</strong><p>{{ content.caption }}</p>{% if content.cta %}<p class="content-cta">{{ content.cta }}</p>{% endif %}</div>
+  {% elif content.kind == 'instagram_image' %}
+    <div class="preview-label">Concept d’image · Aucun média généré</div><p class="hook">{{ content.hook }}</p><div class="visual-concept"><strong>Direction visuelle</strong><p>{{ content.visual_concept }}</p></div><div class="caption-box"><strong>Légende</strong><p>{{ content.caption }}</p>{% if content.cta %}<p class="content-cta">{{ content.cta }}</p>{% endif %}</div>
+  {% elif content.kind == 'facebook' %}
+    <div class="facebook-preview"><div class="preview-label">Aperçu Facebook · Non publié</div><div class="facebook-author"><span class="x-avatar" aria-hidden="true">LO</span><div><strong>L’Orchestrateur</strong><small>Contenu en revue</small></div></div><p class="hook">{{ content.opening }}</p><p>{{ content.body }}</p>{% if content.cta %}<p class="content-cta">{{ content.cta }}</p>{% endif %}{% if content.link_context %}<div class="link-context"><strong>Contexte de lien recommandé</strong><span>{{ content.link_context }}</span></div>{% endif %}</div>
+  {% endif %}
+  <footer class="artifact-footer"><span>{{ item.schema }}</span>{% if item.provider %}<span>{{ item.provider.name }} · {{ item.provider.model }}</span>{% endif %}<span>{{ item.sources|length }} source(s) liée(s)</span></footer>
+</article>
+{% endmacro %}

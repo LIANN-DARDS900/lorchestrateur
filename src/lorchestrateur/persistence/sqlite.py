@@ -215,6 +215,13 @@ class SQLiteContentJobRepository:
             raise JobNotFoundError(f"content job not found: {job_id}")
         return self._row_to_job(row)
 
+    def list_jobs(self) -> tuple[ContentJob, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM content_jobs ORDER BY created_at DESC, id DESC"
+            ).fetchall()
+        return tuple(self._row_to_job(row) for row in rows)
+
     def save(self, job: ContentJob, step: JobStep) -> None:
         with self._connect() as connection:
             self._update_job(connection, job, step)

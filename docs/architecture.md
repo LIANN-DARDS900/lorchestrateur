@@ -3,12 +3,13 @@
 ## Objective
 
 Maintain a small, production-minded core that makes workflow and content-intelligence execution
-explicit, traceable, and safe to extend. The project deliberately avoids an HTTP framework,
-background queue, AI framework/SDK coupling, publishing adapters, analytics, and a frontend for now.
+explicit, traceable, and safe to extend. A server-rendered Flask adapter now exposes the engine
+without moving business logic into HTTP controllers. The project still deliberately avoids a
+background queue, AI framework/SDK coupling, publishing adapters, analytics, and a SPA build chain.
 
 ## Technology decision
 
-Use Python 3.11+ with a `src` package layout and no runtime dependencies for the foundation. The
+Use Python 3.11+ with a `src` package layout and Flask as the only direct runtime dependency. The
 domain and application layers remain framework-neutral. SQLite is the first persistence adapter;
 application code depends on a repository protocol so a future PostgreSQL adapter does not require
 workflow changes.
@@ -28,6 +29,9 @@ workflow changes.
    module and registration, not orchestration conditionals.
 5. **Persistence** — repository protocol plus in-memory and SQLite adapters. Updates use a job
    version check and store the corresponding checkpoint in the same transaction.
+6. **Web** — application factory, composition root, thin routes, CSRF enforcement, presenters,
+   Jinja templates, and static assets. The web layer imports application contracts; core layers do
+   not import Flask.
 
 Dependencies point inward: adapters know core contracts; the domain does not know SQLite, provider
 SDKs, web frameworks, or social networks. Production adapters use an injected standard-library HTTP
@@ -48,7 +52,9 @@ adaptation -> validation -> controlled repair -> validation -> stop or await app
 ```
 
 No unbounded regeneration path exists. Human approval is represented by an explicit transition and
-actor trace before publishing.
+actor trace before publishing. A human change request consumes the same single repair budget. Its
+guidance is supplied to the controlled adaptation call but only its length—not the content—is kept
+in generic trace metadata. A successful repair creates a new durable platform revision.
 
 The adaptation pipeline identifies a logical attempt from the job, canonical master, and current
 repair count. Persisted results from the same attempt are reused after an accidental retry. A repair
@@ -80,11 +86,11 @@ excerpts, Authorization headers, response bodies, or generated content.
 
 Near-term additions should preserve these boundaries:
 
-1. Add an API composition layer and idempotent worker execution around application use cases.
-2. Introduce migration tooling and a PostgreSQL repository when deployment requires it.
-3. Add publishing adapters only after per-platform credentials, idempotency, retry, and audit policies
+1. Add publishing adapters only after per-platform credentials, idempotency, retry, and audit policies
    are approved.
-4. Add delivery receipts and publication reconciliation before analytics or a learning loop.
+2. Add delivery receipts and publication reconciliation before analytics or a learning loop.
+3. Introduce authentication, migration tooling, PostgreSQL, and bounded background execution before
+   any shared or hosted deployment.
 
 ## Product-owner decisions still needed
 

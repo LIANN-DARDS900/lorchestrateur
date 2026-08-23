@@ -40,6 +40,16 @@ class InMemoryContentJobRepository:
             except KeyError as exc:
                 raise JobNotFoundError(f"content job not found: {job_id}") from exc
 
+    def list_jobs(self) -> tuple[ContentJob, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    self._jobs.values(),
+                    key=lambda job: (job.created_at, job.id),
+                    reverse=True,
+                )
+            )
+
     def save(self, job: ContentJob, step: JobStep) -> None:
         with self._lock:
             self._validate_checkpoint(job, step)

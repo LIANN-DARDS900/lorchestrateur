@@ -229,6 +229,47 @@ class StateMachine:
             repair_attempts=job.repair_attempts + 1,
         )
 
+    def request_human_revision(
+        self,
+        job: ContentJob,
+        *,
+        reason: str,
+        requested_by: str,
+    ) -> tuple[ContentJob, JobStep]:
+        """Return approval-ready content to adaptation using the same repair budget."""
+
+        if job.state is not ContentJobState.AWAITING_APPROVAL:
+            raise StateTransitionError(
+                "human revision can only be requested while awaiting approval"
+            )
+        normalized_reason = reason.strip()
+        normalized_actor = requested_by.strip()
+        if not normalized_reason:
+            raise ValueError("revision reason cannot be empty")
+        if not normalized_actor:
+            raise ValueError("requested_by cannot be empty")
+        if job.repair_attempts >= self.max_repair_attempts:
+            return self.pause(
+                job,
+                reason="controlled repair budget exhausted",
+                details={
+                    "stage": "human_review",
+                    "requested_by": normalized_actor,
+                    "revision_reason_characters": len(normalized_reason),
+                },
+            )
+        return self._apply(
+            job,
+            ContentJobState.ADAPTING_PLATFORMS,
+            event="human_revision_requested",
+            details={
+                "requested_by": normalized_actor,
+                "revision_reason_characters": len(normalized_reason),
+                "repair_attempt": job.repair_attempts + 1,
+            },
+            repair_attempts=job.repair_attempts + 1,
+        )
+
     def _apply(
         self,
         job: ContentJob,

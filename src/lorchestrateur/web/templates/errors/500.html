@@ -1,0 +1,1 @@
+{% extends "base.html" %}{% block title %}Erreur · L’Orchestrateur{% endblock %}{% block content %}<div class="error-page"><span>500</span><h1>Une erreur est survenue</h1><p>L’incident a été signalé de manière sécurisée. Aucun détail sensible n’est affiché.</p><a class="button button-primary" href="{{ url_for('web.dashboard') }}">Retour au tableau de bord</a></div>{% endblock %}
