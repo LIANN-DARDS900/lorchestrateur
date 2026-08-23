@@ -18,6 +18,17 @@
   <article class="stat-card"><span>Attention</span><strong>{{ dashboard.attention }}</strong><small>en pause ou en échec</small></article>
 </section>
 
+<section class="panel publication-ops performance-summary">
+  <div class="panel-heading"><div><p class="eyebrow">Performance Intelligence</p><h2>Mesure publication-liée</h2></div><a class="text-link" href="{{ url_for('web.analytics_overview') }}">Ouvrir Performance</a></div>
+  <div class="compact-stats">
+    <div><span>Reçus suivis</span><strong>{{ dashboard.analytics.tracked_receipts }}</strong></div>
+    <div><span>Instantanés</span><strong>{{ dashboard.analytics.snapshots }}</strong></div>
+    <div><span>Collectes en erreur</span><strong>{{ dashboard.analytics.errors }}</strong></div>
+    <div><span>Dernière synchronisation</span><strong class="compact-date">{{ dashboard.analytics.latest_at or 'Jamais' }}</strong></div>
+  </div>
+  <p class="field-help">Mesures observées uniquement — aucune prédiction ni optimisation automatique.</p>
+</section>
+
 <section class="panel publication-ops">
   <div class="panel-heading"><div><p class="eyebrow">Opérations de publication</p><h2>Livraisons gouvernées</h2></div></div>
   <div class="compact-stats">

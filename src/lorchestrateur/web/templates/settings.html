@@ -9,6 +9,9 @@
   <article class="panel setting-card"><span class="card-label">Mode publication</span><strong>{{ publishing_mode }}</strong><p>Le mode réel n’est jamais déduit de la seule présence d’identifiants.</p></article>
   <article class="panel setting-card"><span class="card-label">Politique de livraison</span><strong>{{ publishing_policy }}</strong><p>La simulation contrôle les charges utiles sans contacter les plateformes.</p></article>
   <article class="panel setting-card"><span class="card-label">Fuseau applicatif</span><strong>{{ app_timezone }}</strong><p>Les programmations sont résolues explicitement puis conservées avec leur décalage.</p></article>
+  <article class="panel setting-card"><span class="card-label">Mode Analytics</span><strong>{{ analytics_mode }}</strong><p>{{ analytics_policy }}. Aucun droit n’est déduit des identifiants de publication.</p></article>
+  <article class="panel setting-card"><span class="card-label">Collecte périodique</span><strong>{{ analytics_poll_seconds }} secondes</strong><p>Le worker évalue les fenêtres configurées sans marteler les plateformes.</p></article>
+  <article class="panel setting-card"><span class="card-label">Rétention Analytics</span><strong>{{ analytics_retention_days }} jours</strong><p>Les instantanés anciens sont supprimés selon une politique explicite.</p></article>
 </section>
-<div class="notice"><strong>Identifiants gérés par l’environnement</strong><span>Les clés IA et les jetons de publication ne sont jamais saisis ni affichés dans cette interface.</span></div>
+<div class="notice"><strong>Identifiants gérés par l’environnement</strong><span>Les clés IA, jetons de publication et permissions Analytics ne sont jamais saisis ni affichés dans cette interface.</span></div>
 {% endblock %}

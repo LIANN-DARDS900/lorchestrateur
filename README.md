@@ -4,12 +4,14 @@ L'Orchestrateur is a deterministic-first system for governed content intelligenc
 orchestration. It turns an idea and reviewed evidence into a structured strategy and durable
 canonical master content—not autonomous agent conversations.
 
-> **Project status:** Governed Publishing V1. The repository implements an evidence-aware pipeline using
+> **Project status:** Performance Intelligence V1. The repository implements an evidence-aware pipeline using
 > governed Gemini and OpenRouter adapters, free-first routing, typed structured generation, and a
 > professional local French web application for creating, reviewing, and approving durable Blog,
 > X, Instagram, and Facebook variants. Approved content can be previewed, simulated, scheduled, and
-> delivered through governed publication adapters with durable receipts. Analytics, automated
-> research, media generation, remote deletion, and enterprise authentication are not implemented.
+> delivered through governed publication adapters with durable receipts. Publication-linked
+> analytics now records transparent historical metric snapshots and data freshness without changing
+> future content decisions. Automated optimization, research, media generation, remote deletion,
+> and enterprise authentication are not implemented.
 
 ## Current foundation
 
@@ -46,9 +48,16 @@ canonical master content—not autonomous agent conversations.
 - Atomic work claims, expiring leases, bounded retries, and uncertain-outcome reconciliation
 - Per-item delivery receipts and resumable partial X threads
 - An explicit Instagram media-attachment boundary without media generation or blob storage
+- Typed, platform-specific metric definitions with explicit units and aggregation semantics
+- Publication-receipt-linked analytics collection runs and durable historical snapshots
+- Deterministic demo analytics requiring no network, credentials, or social quota
+- Isolated X and Meta analytics adapters with classified failures and bounded retries
+- Missing-versus-zero integrity, freshness indicators, configurable retention, and manual cooldowns
+- French cross-platform Performance views with accessible server-rendered metric trends
 
 Architecture details are in [docs/architecture.md](docs/architecture.md) and
-[docs/content-intelligence.md](docs/content-intelligence.md).
+[docs/content-intelligence.md](docs/content-intelligence.md). Governed metric semantics and live
+adapter limits are documented in [docs/analytics.md](docs/analytics.md).
 
 ## Workflow model
 
@@ -90,8 +99,10 @@ src/lorchestrateur/
   persistence/   repository contract, in-memory and SQLite adapters
   platforms/     platform contract, registry, initial definitions
   publishing/    contracts, registry, safety service, live/demo platform adapters
+  analytics/     typed metrics, adapter registry, collection service, live/demo adapters
   web/           Flask adapter, presenters, French templates, demo composition, static assets
   worker.py      durable SQLite schedule polling and claim execution
+  analytics_worker.py  durable receipt-linked metric polling and retention
   config.py      environment-backed non-secret settings
 tests/           standard-library automated test suite
 docs/            architecture decisions and delivery plan
@@ -151,6 +162,12 @@ not contain credentials or automatically send credentials to clients.
 | `APP_TIMEZONE` | `Africa/Casablanca` | IANA timezone used by the scheduling UI |
 | `PUBLISHING_LEASE_SECONDS` | `120` | Expiring durable work-claim duration |
 | `PUBLISHING_POLL_SECONDS` | `10` | Local worker polling interval |
+| `ANALYTICS_ENABLED` | `false` | Explicit authorization for external metric collection |
+| `ANALYTICS_ADAPTER_MODE` | `demo` | Deterministic local metrics or explicitly configured real adapters |
+| `ANALYTICS_POLL_SECONDS` | `3600` | Local analytics worker polling interval |
+| `ANALYTICS_MIN_REFRESH_SECONDS` | `300` | Manual refresh cooldown per receipt |
+| `ANALYTICS_STALE_AFTER_SECONDS` | `7200` | Age after which observed data is labelled stale |
+| `ANALYTICS_RETENTION_DAYS` | `730` | Local historical snapshot retention |
 
 Cost classification is configuration-driven. Only `free` is eligible while paid AI is disabled;
 both `paid` and `unknown` fail closed. A model name or provider label never implies permanent free
@@ -180,6 +197,13 @@ For a complete no-network delivery demonstration, explicitly set
 media URL metadata. Start durable schedule processing with `python -m lorchestrateur.worker`; add
 `--once` for one polling pass. See [docs/publishing.md](docs/publishing.md) for policy, adapters,
 claims, retry/reconciliation semantics, and manual live-test steps.
+
+After a demo delivery, open **Performance** and collect deterministic metrics with no network. Start
+scheduled collection with `python -m lorchestrateur.analytics_worker`; add `--once` for one polling
+pass. Real analytics remains disabled by default and requires separate platform analytics settings,
+credentials, and permissions. Missing metrics display as unavailable, not zero. See
+[docs/analytics.md](docs/analytics.md) for platform metric support, cumulative semantics, freshness,
+retention, and manual live-collection steps.
 
 For governed real-provider execution, configure Gemini and/or OpenRouter as documented, declare the
 current model cost class, set `APP_AI_MODE=real`, and restart the same command. The UI contains no
@@ -260,6 +284,11 @@ The automated suite covers:
 - approved-only publication, dry runs, schedules, cancellation, claims, leases, and SQLite restarts
 - X thread continuation, Facebook and Instagram payloads, Blog export, retries, and reconciliation
 - French publication preview, confirmation, receipts, Instagram media readiness, and credential safety
+- typed metric definitions, families, missing-versus-zero handling, collection runs, and snapshots
+- SQLite analytics history, restart/idempotency behavior, cumulative aggregation, and retention
+- deterministic no-network demo analytics plus mocked X, Instagram, and Facebook protocol behavior
+- bounded analytics retry/rate-limit handling that preserves previous history
+- French performance summaries, trends, freshness, collection errors, and governed manual refresh
 
 Tests use only local fakes and in-memory HTTP transports; they require no API credentials, network
 access, provider quota, or paid services.
@@ -268,7 +297,7 @@ access, provider quota, or paid services.
 
 - Automated web research/crawling
 - Image or video generation for Instagram concepts
-- Analytics, experiments, and learning loops
+- Automated optimization, performance advice, experiments, and learning loops
 - CMS-specific Blog publishing, remote deletion, enterprise authentication, and multi-user collaboration
 - PostgreSQL adapter and production schema migrations
 

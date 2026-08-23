@@ -5,11 +5,16 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
+from lorchestrateur.analytics.metrics import FAMILY_LABELS
+from lorchestrateur.analytics.service import AnalyticsService
+from lorchestrateur.domain.analytics import AnalyticsRunOutcome
 from lorchestrateur.domain.platform_content import PlatformContentRecord
 from lorchestrateur.domain.workflow import ContentJob, ContentJobState
 from lorchestrateur.persistence.contracts import (
+    AnalyticsRepository,
     ArtifactNotFoundError,
     ContentIntelligenceRepository,
 )
@@ -94,7 +99,10 @@ def present_job(job: ContentJob) -> dict[str, Any]:
     }
 
 
-def dashboard_view(repository: ContentIntelligenceRepository) -> dict[str, Any]:
+def dashboard_view(
+    repository: ContentIntelligenceRepository,
+    analytics_service: AnalyticsService | None = None,
+) -> dict[str, Any]:
     jobs = repository.list_jobs()
     counts = Counter(job.state for job in jobs)
     processing_states = {
@@ -109,6 +117,25 @@ def dashboard_view(repository: ContentIntelligenceRepository) -> dict[str, Any]:
         repository.list_publications() if hasattr(repository, "list_publications") else ()
     )
     publication_counts = Counter(item.status.value for item in publications)
+    analytics_runs = (
+        repository.list_analytics_runs() if hasattr(repository, "list_analytics_runs") else ()
+    )
+    snapshots = (
+        repository.list_metric_snapshots() if hasattr(repository, "list_metric_snapshots") else ()
+    )
+    analytics_jobs = []
+    if analytics_service is not None:
+        for job in jobs:
+            if job.state is not ContentJobState.PUBLISHED:
+                continue
+            platforms = analytics_service.summarize_job(job.id)
+            if any(any(metric.value is not None for metric in item.metrics) for item in platforms):
+                analytics_jobs.append(
+                    {
+                        "job": present_job(job),
+                        "platforms": [_present_platform_performance(item) for item in platforms],
+                    }
+                )
     return {
         "total": len(jobs),
         "processing": sum(counts[state] for state in processing_states),
@@ -123,6 +150,106 @@ def dashboard_view(repository: ContentIntelligenceRepository) -> dict[str, Any]:
             "failed": publication_counts["failed"],
             "reconciliation": publication_counts["needs_reconciliation"],
         },
+        "analytics": {
+            "tracked_receipts": len({item.publication_receipt_id for item in snapshots}),
+            "snapshots": len(snapshots),
+            "errors": sum(
+                item.outcome
+                in {
+                    AnalyticsRunOutcome.FAILED,
+                    AnalyticsRunOutcome.RATE_LIMITED,
+                }
+                for item in analytics_runs
+            ),
+            "latest_at": _format_datetime(max(item.collected_at for item in snapshots))
+            if snapshots
+            else None,
+            "recent": analytics_jobs[:3],
+        },
+    }
+
+
+def analytics_overview_view(
+    repository: AnalyticsRepository, service: AnalyticsService
+) -> dict[str, Any]:
+    jobs = [job for job in repository.list_jobs() if job.state is ContentJobState.PUBLISHED]
+    contents = []
+    for job in jobs:
+        platforms = service.summarize_job(job.id)
+        contents.append(
+            {
+                "job": present_job(job),
+                "platforms": [_present_platform_performance(item) for item in platforms],
+                "has_data": any(
+                    any(metric.value is not None for metric in item.metrics)
+                    for item in platforms
+                ),
+            }
+        )
+    runs = repository.list_analytics_runs()
+    snapshots = repository.list_metric_snapshots()
+    return {
+        "demo_mode": service.policy.demo_mode,
+        "external_enabled": service.policy.external_collection_enabled,
+        "published_count": len(jobs),
+        "tracked_count": len({item.job_id for item in snapshots}),
+        "snapshot_count": len(snapshots),
+        "error_count": sum(
+            item.outcome in {AnalyticsRunOutcome.FAILED, AnalyticsRunOutcome.RATE_LIMITED}
+            for item in runs
+        ),
+        "latest_at": _format_datetime(max(item.collected_at for item in snapshots))
+        if snapshots
+        else None,
+        "contents": contents,
+    }
+
+
+def analytics_job_view(
+    repository: AnalyticsRepository,
+    service: AnalyticsService,
+    job: ContentJob,
+) -> dict[str, Any]:
+    publications = repository.list_publications(job.id)
+    receipts = [
+        receipt
+        for publication in publications
+        for receipt in repository.list_publication_receipts(publication.id)
+    ]
+    receipts_by_platform: dict[str, list] = {}
+    for receipt in receipts:
+        receipts_by_platform.setdefault(receipt.platform, []).append(receipt)
+    platforms = []
+    for performance in service.summarize_job(job.id):
+        item = _present_platform_performance(performance)
+        item["receipts"] = [
+            {
+                "id": receipt.id,
+                "published_at": _format_datetime(receipt.published_at),
+                "remote_url": receipt.remote_url,
+                "remote_id": receipt.remote_id,
+            }
+            for receipt in receipts_by_platform.get(performance.platform, [])
+        ]
+        platforms.append(item)
+    runs = repository.list_analytics_runs(job_id=job.id)
+    return {
+        "job": present_job(job),
+        "demo_mode": service.policy.demo_mode,
+        "external_enabled": service.policy.external_collection_enabled,
+        "platforms": platforms,
+        "runs": [
+            {
+                "platform": PLATFORM_LABELS.get(item.platform, item.platform.title()),
+                "started_at": _format_datetime(item.started_at),
+                "outcome": _analytics_outcome_label(item.outcome),
+                "metrics_count": item.metrics_collected_count,
+                "error": item.error_classification,
+                "unavailable_count": len(item.unavailable_metric_keys),
+            }
+            for item in reversed(runs)
+        ],
+        "has_receipts": bool(receipts),
     }
 
 
@@ -460,3 +587,83 @@ def _receipt_status_label(status: str) -> str:
         "reconciled": "Réconciliation confirmée",
     }
     return labels.get(status, status.replace("_", " ").capitalize())
+
+
+def _present_platform_performance(performance) -> dict[str, Any]:
+    return {
+        "platform": performance.platform,
+        "label": PLATFORM_LABELS.get(performance.platform, performance.platform.title()),
+        "latest_at": _format_datetime(performance.latest_at) if performance.latest_at else None,
+        "freshness": performance.freshness,
+        "collection_status": performance.collection_status,
+        "source_label": performance.source_label,
+        "receipt_count": performance.receipt_count,
+        "next_collection_at": (
+            _format_datetime(performance.next_collection_at)
+            if performance.next_collection_at
+            else None
+        ),
+        "metrics": [
+            {
+                "key": item.definition.key,
+                "label": item.definition.label,
+                "description": item.definition.description,
+                "family": FAMILY_LABELS[item.definition.family],
+                "aggregation": item.definition.aggregation.value,
+                "value": _format_metric(item.value),
+                "available": item.value is not None,
+                "change": _format_change(item.change),
+                "history": [
+                    {
+                        "value": _format_metric(point.value),
+                        "observed_at": _format_datetime(point.observed_at),
+                    }
+                    for point in item.history
+                ],
+                "chart_points": _chart_points(tuple(point.value for point in item.history)),
+            }
+            for item in performance.metrics
+        ],
+    }
+
+
+def _format_metric(value: Decimal | None) -> str:
+    if value is None:
+        return "Indisponible"
+    if value == value.to_integral_value():
+        return f"{int(value):,}".replace(",", " ")
+    return format(value.normalize(), "f").replace(".", ",")
+
+
+def _format_change(value: Decimal | None) -> str | None:
+    if value is None:
+        return None
+    prefix = "+" if value > 0 else ""
+    return prefix + _format_metric(value)
+
+
+def _chart_points(values: tuple[Decimal, ...]) -> str | None:
+    if len(values) < 2:
+        return None
+    width = Decimal(600)
+    height = Decimal(120)
+    low = min(values)
+    high = max(values)
+    spread = high - low
+    points = []
+    for index, value in enumerate(values):
+        x = width * Decimal(index) / Decimal(len(values) - 1)
+        y = height / 2 if spread == 0 else height - ((value - low) / spread * height)
+        points.append(f"{int(x)},{int(y)}")
+    return " ".join(points)
+
+
+def _analytics_outcome_label(outcome: AnalyticsRunOutcome) -> str:
+    return {
+        AnalyticsRunOutcome.RUNNING: "Synchronisation en cours",
+        AnalyticsRunOutcome.SUCCEEDED: "Collecte réussie",
+        AnalyticsRunOutcome.PARTIAL: "Collecte partielle",
+        AnalyticsRunOutcome.FAILED: "Échec de collecte",
+        AnalyticsRunOutcome.RATE_LIMITED: "Limite API",
+        AnalyticsRunOutcome.UNAVAILABLE: "Métriques indisponibles",
+    }[outcome]

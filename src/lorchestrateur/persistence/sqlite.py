@@ -8,9 +8,19 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from types import MappingProxyType
 
+from lorchestrateur.domain.analytics import (
+    AggregationBehavior,
+    AnalyticsCollectionRun,
+    AnalyticsRunOutcome,
+    MetricDefinition,
+    MetricFamily,
+    MetricSnapshot,
+    MetricUnit,
+)
 from lorchestrateur.domain.content import (
     ContentStrategy,
     EvidenceStatus,
@@ -252,6 +262,59 @@ class SQLiteContentJobRepository:
                     UNIQUE(platform_content_id, media_order)
                 );
 
+                CREATE TABLE IF NOT EXISTS metric_definitions (
+                    metric_key TEXT PRIMARY KEY,
+                    platform TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    unit TEXT NOT NULL,
+                    family TEXT NOT NULL,
+                    aggregation_behavior TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    version TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS analytics_collection_runs (
+                    id TEXT PRIMARY KEY,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    platform TEXT NOT NULL,
+                    publication_receipt_id TEXT NOT NULL
+                        REFERENCES publication_receipts(id) ON DELETE CASCADE,
+                    job_id TEXT NOT NULL REFERENCES content_jobs(id) ON DELETE CASCADE,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    outcome TEXT NOT NULL,
+                    adapter_name TEXT NOT NULL,
+                    adapter_version TEXT NOT NULL,
+                    error_classification TEXT,
+                    metrics_collected_count INTEGER NOT NULL,
+                    unavailable_metric_keys TEXT NOT NULL,
+                    retry_count INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS metric_snapshots (
+                    id TEXT PRIMARY KEY,
+                    collection_run_id TEXT NOT NULL
+                        REFERENCES analytics_collection_runs(id) ON DELETE CASCADE,
+                    publication_receipt_id TEXT NOT NULL
+                        REFERENCES publication_receipts(id) ON DELETE CASCADE,
+                    job_id TEXT NOT NULL REFERENCES content_jobs(id) ON DELETE CASCADE,
+                    platform_content_id TEXT NOT NULL
+                        REFERENCES platform_contents(id) ON DELETE CASCADE,
+                    platform TEXT NOT NULL,
+                    metric_key TEXT NOT NULL
+                        REFERENCES metric_definitions(metric_key),
+                    metric_value TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    period_start TEXT,
+                    period_end TEXT,
+                    source TEXT NOT NULL,
+                    source_version TEXT NOT NULL,
+                    collected_at TEXT NOT NULL,
+                    snapshot_metadata TEXT NOT NULL,
+                    UNIQUE(collection_run_id, metric_key)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_job_steps_job_id
                     ON job_steps(job_id, sequence);
 
@@ -267,7 +330,25 @@ class SQLiteContentJobRepository:
                 CREATE INDEX IF NOT EXISTS idx_publications_job
                     ON publication_requests(job_id, platform, created_at);
 
-                PRAGMA user_version = 4;
+                CREATE INDEX IF NOT EXISTS idx_metric_definitions_platform
+                    ON metric_definitions(platform, family, metric_key);
+
+                CREATE INDEX IF NOT EXISTS idx_analytics_runs_receipt
+                    ON analytics_collection_runs(publication_receipt_id, started_at);
+
+                CREATE INDEX IF NOT EXISTS idx_analytics_runs_job
+                    ON analytics_collection_runs(job_id, platform, started_at);
+
+                CREATE INDEX IF NOT EXISTS idx_metric_snapshots_receipt_metric
+                    ON metric_snapshots(publication_receipt_id, metric_key, observed_at);
+
+                CREATE INDEX IF NOT EXISTS idx_metric_snapshots_job_platform
+                    ON metric_snapshots(job_id, platform, collected_at);
+
+                CREATE INDEX IF NOT EXISTS idx_metric_snapshots_collected
+                    ON metric_snapshots(collected_at);
+
+                PRAGMA user_version = 5;
                 """
             )
 
@@ -724,6 +805,15 @@ class SQLiteContentJobRepository:
             ).fetchall()
         return tuple(self._row_to_publication_receipt(row) for row in rows)
 
+    def get_publication_receipt(self, receipt_id: str) -> PublicationReceipt:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM publication_receipts WHERE id = ?", (receipt_id,)
+            ).fetchone()
+        if row is None:
+            raise ArtifactNotFoundError(f"publication receipt not found: {receipt_id}")
+        return self._row_to_publication_receipt(row)
+
     def add_media_asset(self, asset: MediaAsset) -> None:
         try:
             with self._connect() as connection:
@@ -925,6 +1015,203 @@ class SQLiteContentJobRepository:
                     )
             return tuple(recovered)
 
+    def upsert_metric_definition(self, definition: MetricDefinition) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO metric_definitions (
+                    metric_key, platform, label, description, unit, family,
+                    aggregation_behavior, source, version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(metric_key) DO UPDATE SET
+                    platform = excluded.platform,
+                    label = excluded.label,
+                    description = excluded.description,
+                    unit = excluded.unit,
+                    family = excluded.family,
+                    aggregation_behavior = excluded.aggregation_behavior,
+                    source = excluded.source,
+                    version = excluded.version
+                """,
+                (
+                    definition.key,
+                    definition.platform,
+                    definition.label,
+                    definition.description,
+                    definition.unit.value,
+                    definition.family.value,
+                    definition.aggregation.value,
+                    definition.source,
+                    definition.version,
+                ),
+            )
+
+    def list_metric_definitions(
+        self, *, platform: str | None = None
+    ) -> tuple[MetricDefinition, ...]:
+        with self._connect() as connection:
+            if platform is None:
+                rows = connection.execute(
+                    "SELECT * FROM metric_definitions ORDER BY metric_key"
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM metric_definitions
+                    WHERE platform = ? ORDER BY metric_key
+                    """,
+                    (platform,),
+                ).fetchall()
+        return tuple(self._row_to_metric_definition(row) for row in rows)
+
+    def add_analytics_run(self, run: AnalyticsCollectionRun) -> AnalyticsCollectionRun:
+        existing = self.get_analytics_run_by_idempotency_key(run.idempotency_key)
+        if existing is not None:
+            return existing
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO analytics_collection_runs (
+                        id, idempotency_key, platform, publication_receipt_id,
+                        job_id, started_at, completed_at, outcome, adapter_name,
+                        adapter_version, error_classification,
+                        metrics_collected_count, unavailable_metric_keys, retry_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    self._analytics_run_values(run),
+                )
+        except sqlite3.IntegrityError as exc:
+            existing = self.get_analytics_run_by_idempotency_key(run.idempotency_key)
+            if existing is not None:
+                return existing
+            raise DuplicateArtifactError(f"analytics run already exists: {run.id}") from exc
+        return run
+
+    def get_analytics_run_by_idempotency_key(
+        self, idempotency_key: str
+    ) -> AnalyticsCollectionRun | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM analytics_collection_runs WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+        return None if row is None else self._row_to_analytics_run(row)
+
+    def save_analytics_run(self, run: AnalyticsCollectionRun) -> None:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE analytics_collection_runs SET
+                    idempotency_key = ?, platform = ?, publication_receipt_id = ?,
+                    job_id = ?, started_at = ?, completed_at = ?, outcome = ?,
+                    adapter_name = ?, adapter_version = ?, error_classification = ?,
+                    metrics_collected_count = ?, unavailable_metric_keys = ?, retry_count = ?
+                WHERE id = ?
+                """,
+                (*self._analytics_run_values(run)[1:], run.id),
+            )
+            if cursor.rowcount != 1:
+                raise ArtifactNotFoundError(f"analytics run not found: {run.id}")
+
+    def list_analytics_runs(
+        self,
+        *,
+        receipt_id: str | None = None,
+        job_id: str | None = None,
+    ) -> tuple[AnalyticsCollectionRun, ...]:
+        clauses = []
+        values = []
+        if receipt_id is not None:
+            clauses.append("publication_receipt_id = ?")
+            values.append(receipt_id)
+        if job_id is not None:
+            clauses.append("job_id = ?")
+            values.append(job_id)
+        query = "SELECT * FROM analytics_collection_runs"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY started_at, id"
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(values)).fetchall()
+        return tuple(self._row_to_analytics_run(row) for row in rows)
+
+    def add_metric_snapshot(self, snapshot: MetricSnapshot) -> MetricSnapshot:
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO metric_snapshots (
+                        id, collection_run_id, publication_receipt_id, job_id,
+                        platform_content_id, platform, metric_key, metric_value,
+                        observed_at, period_start, period_end, source,
+                        source_version, collected_at, snapshot_metadata
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        snapshot.id,
+                        snapshot.collection_run_id,
+                        snapshot.publication_receipt_id,
+                        snapshot.job_id,
+                        snapshot.platform_content_id,
+                        snapshot.platform,
+                        snapshot.metric_key,
+                        str(snapshot.value),
+                        snapshot.observed_at.isoformat(),
+                        snapshot.period_start.isoformat() if snapshot.period_start else None,
+                        snapshot.period_end.isoformat() if snapshot.period_end else None,
+                        snapshot.source,
+                        snapshot.source_version,
+                        snapshot.collected_at.isoformat(),
+                        json.dumps(dict(snapshot.metadata), sort_keys=True),
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            with self._connect() as connection:
+                row = connection.execute(
+                    """
+                    SELECT * FROM metric_snapshots
+                    WHERE collection_run_id = ? AND metric_key = ?
+                    """,
+                    (snapshot.collection_run_id, snapshot.metric_key),
+                ).fetchone()
+            if row is not None:
+                return self._row_to_metric_snapshot(row)
+            raise DuplicateArtifactError(f"metric snapshot already exists: {snapshot.id}") from exc
+        return snapshot
+
+    def list_metric_snapshots(
+        self,
+        *,
+        receipt_id: str | None = None,
+        job_id: str | None = None,
+        platform: str | None = None,
+        metric_key: str | None = None,
+    ) -> tuple[MetricSnapshot, ...]:
+        filters = {
+            "publication_receipt_id": receipt_id,
+            "job_id": job_id,
+            "platform": platform,
+            "metric_key": metric_key,
+        }
+        clauses = [f"{key} = ?" for key, value in filters.items() if value is not None]
+        values = [value for value in filters.values() if value is not None]
+        query = "SELECT * FROM metric_snapshots"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY observed_at, collected_at, id"
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(values)).fetchall()
+        return tuple(self._row_to_metric_snapshot(row) for row in rows)
+
+    def prune_metric_snapshots(self, *, collected_before: datetime) -> int:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM metric_snapshots WHERE collected_at < ?",
+                (collected_before.isoformat(),),
+            )
+            return cursor.rowcount
+
     @staticmethod
     def _update_job(connection: sqlite3.Connection, job: ContentJob, step: JobStep) -> None:
         if step.job_id != job.id or step.sequence != job.version:
@@ -1044,6 +1331,25 @@ class SQLiteContentJobRepository:
             (publication.lease_expires_at.isoformat() if publication.lease_expires_at else None),
             publication.created_at.isoformat(),
             publication.updated_at.isoformat(),
+        )
+
+    @staticmethod
+    def _analytics_run_values(run: AnalyticsCollectionRun) -> tuple[object, ...]:
+        return (
+            run.id,
+            run.idempotency_key,
+            run.platform,
+            run.publication_receipt_id,
+            run.job_id,
+            run.started_at.isoformat(),
+            run.completed_at.isoformat() if run.completed_at else None,
+            run.outcome.value,
+            run.adapter_name,
+            run.adapter_version,
+            run.error_classification,
+            run.metrics_collected_count,
+            json.dumps(run.unavailable_metric_keys),
+            run.retry_count,
         )
 
     @staticmethod
@@ -1257,6 +1563,63 @@ class SQLiteContentJobRepository:
             status=row["status"],
             delivery_kind=row["delivery_kind"],
             metadata=MappingProxyType(json.loads(row["receipt_metadata"])),
+        )
+
+    @staticmethod
+    def _row_to_metric_definition(row: sqlite3.Row) -> MetricDefinition:
+        return MetricDefinition(
+            key=row["metric_key"],
+            platform=row["platform"],
+            label=row["label"],
+            description=row["description"],
+            unit=MetricUnit(row["unit"]),
+            family=MetricFamily(row["family"]),
+            aggregation=AggregationBehavior(row["aggregation_behavior"]),
+            source=row["source"],
+            version=row["version"],
+        )
+
+    @staticmethod
+    def _row_to_analytics_run(row: sqlite3.Row) -> AnalyticsCollectionRun:
+        return AnalyticsCollectionRun(
+            id=row["id"],
+            idempotency_key=row["idempotency_key"],
+            platform=row["platform"],
+            publication_receipt_id=row["publication_receipt_id"],
+            job_id=row["job_id"],
+            started_at=datetime.fromisoformat(row["started_at"]),
+            completed_at=(
+                datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None
+            ),
+            outcome=AnalyticsRunOutcome(row["outcome"]),
+            adapter_name=row["adapter_name"],
+            adapter_version=row["adapter_version"],
+            error_classification=row["error_classification"],
+            metrics_collected_count=row["metrics_collected_count"],
+            unavailable_metric_keys=tuple(json.loads(row["unavailable_metric_keys"])),
+            retry_count=row["retry_count"],
+        )
+
+    @staticmethod
+    def _row_to_metric_snapshot(row: sqlite3.Row) -> MetricSnapshot:
+        return MetricSnapshot(
+            id=row["id"],
+            collection_run_id=row["collection_run_id"],
+            publication_receipt_id=row["publication_receipt_id"],
+            job_id=row["job_id"],
+            platform_content_id=row["platform_content_id"],
+            platform=row["platform"],
+            metric_key=row["metric_key"],
+            value=Decimal(row["metric_value"]),
+            observed_at=datetime.fromisoformat(row["observed_at"]),
+            period_start=(
+                datetime.fromisoformat(row["period_start"]) if row["period_start"] else None
+            ),
+            period_end=(datetime.fromisoformat(row["period_end"]) if row["period_end"] else None),
+            source=row["source"],
+            source_version=row["source_version"],
+            collected_at=datetime.fromisoformat(row["collected_at"]),
+            metadata=MappingProxyType(json.loads(row["snapshot_metadata"])),
         )
 
     @staticmethod

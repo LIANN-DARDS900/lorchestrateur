@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Performance · L’Orchestrateur{% endblock %}
+{% block content %}
+<div class="page-heading heading-with-action"><div><p class="eyebrow">Performance Intelligence</p><h1>Performance</h1><p>Mesures observées, reliées aux reçus de livraison et conservées dans le temps.</p></div></div>
+{% if analytics.demo_mode %}<div class="notice notice-demo"><strong>MODE DÉMONSTRATION</strong><span>Ces métriques sont déterministes et ne proviennent d’aucune plateforme externe.</span></div>{% elif not analytics.external_enabled %}<div class="notice notice-danger"><strong>Collecte externe désactivée</strong><span>Les historiques existants restent disponibles. Aucune valeur manquante n’est remplacée par zéro.</span></div>{% endif %}
+<section class="stats-grid analytics-stats" aria-label="État des analyses">
+  <article class="stat-card"><span>Publications</span><strong>{{ analytics.published_count }}</strong><small>contenus livrés</small></article>
+  <article class="stat-card"><span>Suivies</span><strong>{{ analytics.tracked_count }}</strong><small>avec observations</small></article>
+  <article class="stat-card"><span>Historique</span><strong>{{ analytics.snapshot_count }}</strong><small>instantanés conservés</small></article>
+  <article class="stat-card"><span>Collectes en erreur</span><strong>{{ analytics.error_count }}</strong><small>sans perte d’historique</small></article>
+</section>
+<section class="panel section-panel"><div class="panel-heading"><div><p class="eyebrow">Vue globale</p><h2>Contenus publiés</h2><p>Les métriques restent propres à chaque plateforme ; aucun score global artificiel n’est calculé.</p></div><span class="freshness-chip">{{ analytics.latest_at or 'Jamais synchronisé' }}</span></div>
+{% if analytics.contents %}<div class="performance-content-list">{% for content in analytics.contents %}<article class="performance-content-card"><div class="performance-content-head"><div><span class="status status-success">{{ content.job.status }}</span><h3>{{ content.job.idea }}</h3><p>{{ content.job.platforms|join(' · ') }}</p></div><a class="button button-secondary" href="{{ url_for('web.job_analytics', job_id=content.job.id) }}">Voir la performance</a></div><div class="channel-comparison">{% for channel in content.platforms %}<div><span class="platform-chip">{{ channel.label }}</span><strong>{{ channel.collection_status }}</strong><small>{{ channel.freshness }}</small><ul>{% for metric in channel.metrics[:3] %}<li><span>{{ metric.label }}</span><b>{{ metric.value }}</b></li>{% else %}<li><span>Mesures</span><b>Indisponible</b></li>{% endfor %}</ul></div>{% endfor %}</div></article>{% endfor %}</div>{% else %}<div class="empty-state"><span class="empty-symbol" aria-hidden="true">◌</span><h3>Aucune publication suivie</h3><p>Les analyses apparaîtront après une livraison confirmée et une première collecte gouvernée.</p></div>{% endif %}
+</section>
+{% endblock %}

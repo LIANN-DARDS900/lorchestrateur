@@ -8,13 +8,17 @@ from zoneinfo import ZoneInfo
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 
+from lorchestrateur.analytics.contracts import AnalyticsCooldownError
+from lorchestrateur.domain.analytics import AnalyticsRunOutcome
 from lorchestrateur.domain.content import EvidenceStatus, SourceType
 from lorchestrateur.domain.publication import MediaAssetType, PublicationMode
 from lorchestrateur.domain.workflow import ContentJobState, StateTransitionError
-from lorchestrateur.persistence.contracts import ContentIntelligenceRepository
+from lorchestrateur.persistence.contracts import AnalyticsRepository
 from lorchestrateur.publishing.contracts import PublicationError
 from lorchestrateur.web.presenters import (
     PLATFORM_LABELS,
+    analytics_job_view,
+    analytics_overview_view,
     dashboard_view,
     present_job,
     publication_view,
@@ -27,7 +31,7 @@ LOCAL_WORKSPACE_ID = "local-workspace"
 LOCAL_REVIEWER = "Responsable de contenu local"
 
 
-def _repository() -> ContentIntelligenceRepository:
+def _repository() -> AnalyticsRepository:
     return current_app.extensions["lorchestrateur_components"].repository
 
 
@@ -43,9 +47,78 @@ def _publication_service():
     return current_app.extensions["lorchestrateur_components"].publication_service
 
 
+def _analytics_service():
+    return current_app.extensions["lorchestrateur_components"].analytics_service
+
+
 @bp.get("/")
 def dashboard():
-    return render_template("dashboard.html", dashboard=dashboard_view(_repository()))
+    return render_template(
+        "dashboard.html",
+        dashboard=dashboard_view(_repository(), _analytics_service()),
+    )
+
+
+@bp.get("/analytics")
+def analytics_overview():
+    return render_template(
+        "analytics.html",
+        analytics=analytics_overview_view(_repository(), _analytics_service()),
+    )
+
+
+@bp.get("/jobs/<job_id>/analytics")
+def job_analytics(job_id: str):
+    job = _repository().get(job_id)
+    if job.state is not ContentJobState.PUBLISHED:
+        return _action_error("Les analyses sont disponibles après une livraison confirmée.")
+    return render_template(
+        "job_analytics.html",
+        analytics=analytics_job_view(_repository(), _analytics_service(), job),
+    )
+
+
+@bp.post("/jobs/<job_id>/analytics/refresh")
+def refresh_job_analytics(job_id: str):
+    job = _repository().get(job_id)
+    if job.state is not ContentJobState.PUBLISHED:
+        return _action_error("Seul un contenu publié peut synchroniser ses métriques.")
+    receipts = [
+        receipt
+        for publication in _repository().list_publications(job_id)
+        for receipt in _repository().list_publication_receipts(publication.id)
+    ]
+    if not receipts:
+        return _action_error("Aucun reçu de livraison exploitable n’est disponible.")
+    collected = 0
+    unavailable = 0
+    cooldown = 0
+    for receipt in receipts:
+        try:
+            run = _analytics_service().collect_receipt(receipt.id)
+        except AnalyticsCooldownError:
+            cooldown += 1
+            continue
+        if run.outcome in {AnalyticsRunOutcome.SUCCEEDED, AnalyticsRunOutcome.PARTIAL}:
+            collected += 1
+        else:
+            unavailable += 1
+    if collected:
+        flash(
+            f"Métriques actualisées pour {collected} livraison(s). "
+            "Les observations historiques sont conservées.",
+            "success",
+        )
+    elif cooldown:
+        flash("Actualisation déjà récente : le délai de protection est encore actif.", "warning")
+    else:
+        flash(
+            "Aucune nouvelle métrique n’est disponible avec la configuration actuelle.",
+            "warning",
+        )
+    if unavailable and collected:
+        flash(f"{unavailable} livraison(s) restent indisponibles.", "warning")
+    return redirect(url_for("web.job_analytics", job_id=job_id))
 
 
 @bp.get("/content")
@@ -345,6 +418,15 @@ def providers():
         }
         for item in publishing_registry.all()
     ]
+    analytics_registry = current_app.extensions["lorchestrateur_components"].analytics_registry
+    analytics_providers = [
+        {
+            "name": item.key.title() if item.key != "x" else "X",
+            "configured": item.configured,
+            "adapter": item.adapter_name,
+        }
+        for item in analytics_registry.all()
+    ]
     return render_template(
         "providers.html",
         providers=providers_view,
@@ -357,6 +439,9 @@ def providers():
         publishing_enabled=settings.publishing_enabled,
         publishing_dry_run=settings.publishing_dry_run,
         publishing_demo_mode=settings.publishing_adapter_mode == "demo",
+        analytics_providers=analytics_providers,
+        analytics_enabled=settings.analytics_enabled,
+        analytics_demo_mode=settings.analytics_adapter_mode == "demo",
     )
 
 
@@ -377,6 +462,18 @@ def settings_page():
             else ("Activée" if settings.publishing_enabled else "Désactivée")
         ),
         app_timezone=settings.app_timezone,
+        analytics_mode=(
+            "Données de démonstration"
+            if settings.analytics_adapter_mode == "demo"
+            else "Adaptateurs réels"
+        ),
+        analytics_policy=(
+            "Collecte externe activée"
+            if settings.analytics_enabled
+            else "Collecte externe désactivée"
+        ),
+        analytics_poll_seconds=settings.analytics_poll_seconds,
+        analytics_retention_days=settings.analytics_retention_days,
     )
 
 

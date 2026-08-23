@@ -26,6 +26,7 @@
       <nav class="nav-list">
         <a href="{{ url_for('web.dashboard') }}" class="{{ 'active' if request.endpoint == 'web.dashboard' }}">Tableau de bord</a>
         <a href="{{ url_for('web.content_list') }}" class="{{ 'active' if request.endpoint in ['web.content_list', 'web.job_workspace', 'web.publication_workspace'] }}">Contenus</a>
+        <a href="{{ url_for('web.analytics_overview') }}" class="{{ 'active' if request.endpoint in ['web.analytics_overview', 'web.job_analytics'] }}">Performance</a>
         <a href="{{ url_for('web.new_content') }}" class="{{ 'active' if request.endpoint == 'web.new_content' }}">Nouveau contenu</a>
         <a href="{{ url_for('web.review_queue') }}" class="{{ 'active' if request.endpoint == 'web.review_queue' }}">Revue</a>
         <span class="nav-separator" aria-hidden="true"></span>

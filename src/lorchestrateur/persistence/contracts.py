@@ -5,6 +5,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
+from lorchestrateur.domain.analytics import (
+    AnalyticsCollectionRun,
+    MetricDefinition,
+    MetricSnapshot,
+)
 from lorchestrateur.domain.content import ContentStrategy, MasterContent, SourceEvidence
 from lorchestrateur.domain.platform_content import PlatformContentRecord
 from lorchestrateur.domain.publication import (
@@ -114,6 +119,8 @@ class PublicationRepository(ContentIntelligenceRepository, Protocol):
 
     def add_publication_receipt(self, receipt: PublicationReceipt) -> None: ...
 
+    def get_publication_receipt(self, receipt_id: str) -> PublicationReceipt: ...
+
     def list_publication_receipts(self, publication_id: str) -> tuple[PublicationReceipt, ...]: ...
 
     def add_media_asset(self, asset: MediaAsset) -> None: ...
@@ -139,3 +146,39 @@ class PublicationRepository(ContentIntelligenceRepository, Protocol):
     ) -> PublicationRequest | None: ...
 
     def recover_expired_publications(self, *, now: datetime) -> tuple[PublicationRequest, ...]: ...
+
+
+class AnalyticsRepository(PublicationRepository, Protocol):
+    def upsert_metric_definition(self, definition: MetricDefinition) -> None: ...
+
+    def list_metric_definitions(
+        self, *, platform: str | None = None
+    ) -> tuple[MetricDefinition, ...]: ...
+
+    def add_analytics_run(self, run: AnalyticsCollectionRun) -> AnalyticsCollectionRun: ...
+
+    def get_analytics_run_by_idempotency_key(
+        self, idempotency_key: str
+    ) -> AnalyticsCollectionRun | None: ...
+
+    def save_analytics_run(self, run: AnalyticsCollectionRun) -> None: ...
+
+    def list_analytics_runs(
+        self,
+        *,
+        receipt_id: str | None = None,
+        job_id: str | None = None,
+    ) -> tuple[AnalyticsCollectionRun, ...]: ...
+
+    def add_metric_snapshot(self, snapshot: MetricSnapshot) -> MetricSnapshot: ...
+
+    def list_metric_snapshots(
+        self,
+        *,
+        receipt_id: str | None = None,
+        job_id: str | None = None,
+        platform: str | None = None,
+        metric_key: str | None = None,
+    ) -> tuple[MetricSnapshot, ...]: ...
+
+    def prune_metric_snapshots(self, *, collected_before: datetime) -> int: ...

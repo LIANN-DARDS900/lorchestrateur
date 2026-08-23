@@ -71,6 +71,22 @@ def _parse_positive_int(name: str, raw_value: str, *, maximum: int) -> int:
     return value
 
 
+def _parse_collection_offsets(raw_value: str) -> tuple[int, ...]:
+    try:
+        values = tuple(int(item.strip()) for item in raw_value.split(",") if item.strip())
+    except ValueError as exc:
+        raise ConfigurationError(
+            "ANALYTICS_COLLECTION_OFFSETS_HOURS must contain integers"
+        ) from exc
+    if not values or any(item < 0 or item > 8760 for item in values):
+        raise ConfigurationError(
+            "ANALYTICS_COLLECTION_OFFSETS_HOURS must contain values between 0 and 8760"
+        )
+    if tuple(sorted(set(values))) != values:
+        raise ConfigurationError("ANALYTICS_COLLECTION_OFFSETS_HOURS must be unique and increasing")
+    return values
+
+
 def _parse_timezone(name: str, raw_value: str) -> str:
     value = raw_value.strip()
     try:
@@ -148,6 +164,19 @@ class Settings:
     instagram_business_account_id: str | None = None
     blog_publishing_enabled: bool = False
     blog_export_directory: str = "./data/exports"
+    analytics_enabled: bool = False
+    analytics_adapter_mode: str = "demo"
+    analytics_poll_seconds: int = 3600
+    analytics_timeout_seconds: float = 20.0
+    analytics_max_retries: int = 2
+    analytics_min_refresh_seconds: int = 300
+    analytics_stale_after_seconds: int = 7200
+    analytics_retention_days: int = 730
+    analytics_collection_offsets_hours: tuple[int, ...] = (1, 6, 24, 72, 168)
+    x_analytics_enabled: bool = False
+    x_analytics_bearer_token: str | None = field(default=None, repr=False)
+    meta_analytics_enabled: bool = False
+    meta_analytics_access_token: str | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
@@ -166,6 +195,9 @@ class Settings:
         publishing_adapter_mode = source.get("PUBLISHING_ADAPTER_MODE", "demo").strip().lower()
         if publishing_adapter_mode not in {"demo", "real"}:
             raise ConfigurationError("PUBLISHING_ADAPTER_MODE must be demo or real")
+        analytics_adapter_mode = source.get("ANALYTICS_ADAPTER_MODE", "demo").strip().lower()
+        if analytics_adapter_mode not in {"demo", "real"}:
+            raise ConfigurationError("ANALYTICS_ADAPTER_MODE must be demo or real")
         web_host = source.get("WEB_HOST", "127.0.0.1").strip()
         if not web_host:
             raise ConfigurationError("WEB_HOST cannot be empty")
@@ -287,4 +319,46 @@ class Settings:
                 source.get("BLOG_PUBLISHING_ENABLED", "false"),
             ),
             blog_export_directory=blog_export_directory,
+            analytics_enabled=_parse_bool(
+                "ANALYTICS_ENABLED", source.get("ANALYTICS_ENABLED", "false")
+            ),
+            analytics_adapter_mode=analytics_adapter_mode,
+            analytics_poll_seconds=_parse_positive_int(
+                "ANALYTICS_POLL_SECONDS",
+                source.get("ANALYTICS_POLL_SECONDS", "3600"),
+                maximum=86400,
+            ),
+            analytics_timeout_seconds=_parse_timeout(
+                "ANALYTICS_TIMEOUT_SECONDS",
+                source.get("ANALYTICS_TIMEOUT_SECONDS", "20"),
+            ),
+            analytics_max_retries=_parse_retries(
+                "ANALYTICS_MAX_RETRIES", source.get("ANALYTICS_MAX_RETRIES", "2")
+            ),
+            analytics_min_refresh_seconds=_parse_positive_int(
+                "ANALYTICS_MIN_REFRESH_SECONDS",
+                source.get("ANALYTICS_MIN_REFRESH_SECONDS", "300"),
+                maximum=86400,
+            ),
+            analytics_stale_after_seconds=_parse_positive_int(
+                "ANALYTICS_STALE_AFTER_SECONDS",
+                source.get("ANALYTICS_STALE_AFTER_SECONDS", "7200"),
+                maximum=2_592_000,
+            ),
+            analytics_retention_days=_parse_positive_int(
+                "ANALYTICS_RETENTION_DAYS",
+                source.get("ANALYTICS_RETENTION_DAYS", "730"),
+                maximum=3650,
+            ),
+            analytics_collection_offsets_hours=_parse_collection_offsets(
+                source.get("ANALYTICS_COLLECTION_OFFSETS_HOURS", "1,6,24,72,168")
+            ),
+            x_analytics_enabled=_parse_bool(
+                "X_ANALYTICS_ENABLED", source.get("X_ANALYTICS_ENABLED", "false")
+            ),
+            x_analytics_bearer_token=_optional_value(source.get("X_ANALYTICS_BEARER_TOKEN")),
+            meta_analytics_enabled=_parse_bool(
+                "META_ANALYTICS_ENABLED", source.get("META_ANALYTICS_ENABLED", "false")
+            ),
+            meta_analytics_access_token=_optional_value(source.get("META_ANALYTICS_ACCESS_TOKEN")),
         )

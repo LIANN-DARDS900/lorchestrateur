@@ -6,8 +6,9 @@ Maintain a small, production-minded core that makes workflow and content-intelli
 explicit, traceable, and safe to extend. A server-rendered Flask adapter now exposes the engine
 without moving business logic into HTTP controllers. A registry-based publication boundary now
 adds approved-only delivery, SQLite scheduling, receipts, and reconciliation without a distributed
-queue. The project still deliberately avoids AI framework/SDK coupling, analytics, and a SPA build
-chain.
+queue. The project still deliberately avoids AI framework/SDK coupling, an analytics framework, and
+a SPA build chain. A receipt-linked analytics boundary now adds governed observation, historical snapshots, and
+deterministic reporting without feeding metrics back into content generation.
 
 ## Technology decision
 
@@ -37,6 +38,9 @@ workflow changes.
 7. **Publishing** — typed publication/media contracts, a platform registry, authorization and
    idempotency service, isolated remote adapters, and a small claim-based worker. Publishing imports
    domain/repository contracts but orchestration does not import remote protocols.
+8. **Analytics** — typed metric definitions and snapshots, a platform adapter registry, collection
+   policy, deterministic summaries, and a local polling worker. Analytics depends on durable
+   receipts and never imports or invokes content generation.
 
 Dependencies point inward: adapters know core contracts; the domain does not know SQLite, provider
 SDKs, web frameworks, or social networks. Production adapters use an injected standard-library HTTP
@@ -68,7 +72,7 @@ quality threshold; valid variants are retained.
 
 ## Trace and persistence model
 
-The schema contains only the records required through Governed Publishing V1:
+The schema contains only the records required through Performance Intelligence V1:
 
 - `content_jobs` — current checkpoint, version, targets, repair count, and timestamps
 - `job_steps` — ordered transition/event trace with non-secret structured metadata
@@ -82,6 +86,9 @@ The schema contains only the records required through Governed Publishing V1:
 - `publication_attempts` — bounded execution outcomes and sanitized error classifications
 - `publication_receipts` — ordered durable delivery evidence without raw responses or content
 - `media_assets` — external Instagram media references and order, never binary blobs
+- `metric_definitions` — versioned platform metric semantics, units, families, and aggregation rules
+- `analytics_collection_runs` — receipt-linked operational outcomes and sanitized failure classes
+- `metric_snapshots` — exact historical observations linked to receipt, job, content, and run
 
 Artifact, state update, and step insertion are atomic. Prompts, excerpts, and generated content are
 not written into generic trace metadata. No generic AI-request table exists because generation
@@ -97,10 +104,12 @@ excerpts, Authorization headers, response bodies, or generated content.
 Near-term additions should preserve these boundaries:
 
 1. Harden live reconciliation as each selected platform exposes safe lookup capabilities.
-2. Add analytics ingestion only after receipt identity, consent, retention, and metric definitions
-   are approved.
+2. Validate and expand live analytics scopes only against selected account entitlements; keep
+   unsupported metrics unavailable rather than inventing values.
 3. Introduce authentication, migration tooling, PostgreSQL, and stronger worker coordination before
    any shared or hosted deployment.
+4. Design Phase 8 learning as a separate governed decision boundary; historical metrics must not
+   silently mutate strategy, prompts, generation, adaptation, or publication.
 
 ## Product-owner decisions still needed
 

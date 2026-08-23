@@ -6,6 +6,11 @@ from dataclasses import replace
 from datetime import datetime
 from threading import RLock
 
+from lorchestrateur.domain.analytics import (
+    AnalyticsCollectionRun,
+    MetricDefinition,
+    MetricSnapshot,
+)
 from lorchestrateur.domain.content import ContentStrategy, MasterContent, SourceEvidence
 from lorchestrateur.domain.platform_content import PlatformContentRecord
 from lorchestrateur.domain.publication import (
@@ -37,6 +42,9 @@ class InMemoryContentJobRepository:
         self._publication_attempts: dict[str, list[PublicationAttempt]] = {}
         self._publication_receipts: dict[str, list[PublicationReceipt]] = {}
         self._media_assets: dict[str, MediaAsset] = {}
+        self._metric_definitions: dict[str, MetricDefinition] = {}
+        self._analytics_runs: dict[str, AnalyticsCollectionRun] = {}
+        self._metric_snapshots: dict[str, MetricSnapshot] = {}
         self._lock = RLock()
 
     def add(self, job: ContentJob) -> None:
@@ -333,6 +341,14 @@ class InMemoryContentJobRepository:
                 )
             )
 
+    def get_publication_receipt(self, receipt_id: str) -> PublicationReceipt:
+        with self._lock:
+            for receipts in self._publication_receipts.values():
+                for receipt in receipts:
+                    if receipt.id == receipt_id:
+                        return receipt
+        raise ArtifactNotFoundError(f"publication receipt not found: {receipt_id}")
+
     def add_media_asset(self, asset: MediaAsset) -> None:
         with self._lock:
             self.get(asset.job_id)
@@ -455,6 +471,125 @@ class InMemoryContentJobRepository:
                     self._publications[updated.id] = updated
                     recovered.append(updated)
             return tuple(recovered)
+
+    def upsert_metric_definition(self, definition: MetricDefinition) -> None:
+        with self._lock:
+            self._metric_definitions[definition.key] = definition
+
+    def list_metric_definitions(
+        self, *, platform: str | None = None
+    ) -> tuple[MetricDefinition, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    (
+                        item
+                        for item in self._metric_definitions.values()
+                        if platform is None or item.platform == platform
+                    ),
+                    key=lambda item: item.key,
+                )
+            )
+
+    def add_analytics_run(self, run: AnalyticsCollectionRun) -> AnalyticsCollectionRun:
+        with self._lock:
+            existing = self.get_analytics_run_by_idempotency_key(run.idempotency_key)
+            if existing is not None:
+                return existing
+            if run.id in self._analytics_runs:
+                raise DuplicateArtifactError(f"analytics run already exists: {run.id}")
+            self._analytics_runs[run.id] = run
+            return run
+
+    def get_analytics_run_by_idempotency_key(
+        self, idempotency_key: str
+    ) -> AnalyticsCollectionRun | None:
+        with self._lock:
+            return next(
+                (
+                    item
+                    for item in self._analytics_runs.values()
+                    if item.idempotency_key == idempotency_key
+                ),
+                None,
+            )
+
+    def save_analytics_run(self, run: AnalyticsCollectionRun) -> None:
+        with self._lock:
+            if run.id not in self._analytics_runs:
+                raise ArtifactNotFoundError(f"analytics run not found: {run.id}")
+            self._analytics_runs[run.id] = run
+
+    def list_analytics_runs(
+        self,
+        *,
+        receipt_id: str | None = None,
+        job_id: str | None = None,
+    ) -> tuple[AnalyticsCollectionRun, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    (
+                        item
+                        for item in self._analytics_runs.values()
+                        if (receipt_id is None or item.publication_receipt_id == receipt_id)
+                        and (job_id is None or item.job_id == job_id)
+                    ),
+                    key=lambda item: (item.started_at, item.id),
+                )
+            )
+
+    def add_metric_snapshot(self, snapshot: MetricSnapshot) -> MetricSnapshot:
+        with self._lock:
+            existing = next(
+                (
+                    item
+                    for item in self._metric_snapshots.values()
+                    if item.collection_run_id == snapshot.collection_run_id
+                    and item.metric_key == snapshot.metric_key
+                ),
+                None,
+            )
+            if existing is not None:
+                return existing
+            if snapshot.id in self._metric_snapshots:
+                raise DuplicateArtifactError(f"metric snapshot already exists: {snapshot.id}")
+            self._metric_snapshots[snapshot.id] = snapshot
+            return snapshot
+
+    def list_metric_snapshots(
+        self,
+        *,
+        receipt_id: str | None = None,
+        job_id: str | None = None,
+        platform: str | None = None,
+        metric_key: str | None = None,
+    ) -> tuple[MetricSnapshot, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    (
+                        item
+                        for item in self._metric_snapshots.values()
+                        if (receipt_id is None or item.publication_receipt_id == receipt_id)
+                        and (job_id is None or item.job_id == job_id)
+                        and (platform is None or item.platform == platform)
+                        and (metric_key is None or item.metric_key == metric_key)
+                    ),
+                    key=lambda item: (item.observed_at, item.collected_at, item.id),
+                )
+            )
+
+    def prune_metric_snapshots(self, *, collected_before: datetime) -> int:
+        with self._lock:
+            removable = [
+                item.id
+                for item in self._metric_snapshots.values()
+                if item.collected_at < collected_before
+            ]
+            for snapshot_id in removable:
+                del self._metric_snapshots[snapshot_id]
+            return len(removable)
 
     def _validate_checkpoint(self, job: ContentJob, step: JobStep) -> None:
         current = self.get(job.id)
