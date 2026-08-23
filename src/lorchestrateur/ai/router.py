@@ -16,6 +16,7 @@ class ProviderRegistrationError(ValueError):
 class ProviderAttempt:
     provider: str
     outcome: str
+    retry_count: int = 0
 
 
 class AIUnavailableError(RuntimeError):
@@ -61,21 +62,31 @@ class AIRouter:
             if provider is None:
                 attempts.append(ProviderAttempt(provider_name, "not_registered"))
                 continue
+            if not provider.is_configured:
+                attempts.append(ProviderAttempt(provider_name, "not_configured"))
+                continue
             if provider.is_paid and not self._allow_paid_ai:
                 attempts.append(ProviderAttempt(provider_name, "paid_disabled"))
                 continue
             try:
                 available = provider.is_available()
-            except AIProviderError:
-                attempts.append(ProviderAttempt(provider_name, "availability_error"))
+            except AIProviderError as exc:
+                outcome = (
+                    "availability_error"
+                    if exc.classification == "provider_error"
+                    else exc.classification
+                )
+                attempts.append(ProviderAttempt(provider_name, outcome))
                 continue
             if not available:
                 attempts.append(ProviderAttempt(provider_name, "unavailable"))
                 continue
             try:
                 return provider.generate(request)
-            except AIProviderError:
-                attempts.append(ProviderAttempt(provider_name, "provider_error"))
+            except AIProviderError as exc:
+                attempts.append(
+                    ProviderAttempt(provider_name, exc.classification, exc.retry_count)
+                )
 
         raise AIUnavailableError(attempts)
 

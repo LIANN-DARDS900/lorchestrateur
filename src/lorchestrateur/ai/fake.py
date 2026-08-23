@@ -15,6 +15,7 @@ class FakeAIProvider:
     provider_name: str = "fake"
     model_name: str = "fake-v1"
     paid: bool = False
+    configured: bool = True
     available: bool = True
     handler: Callable[[AIRequest], str] | None = None
     structured_output: Mapping[str, Any] | None = None
@@ -25,6 +26,10 @@ class FakeAIProvider:
     @property
     def name(self) -> str:
         return self.provider_name
+
+    @property
+    def is_configured(self) -> bool:
+        return self.configured
 
     @property
     def is_paid(self) -> bool:

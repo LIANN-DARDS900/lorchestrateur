@@ -269,8 +269,7 @@ class ContentIntelligencePipeline:
             event="content_strategy_persisted",
             details={
                 "artifact_id": strategy.id,
-                "provider": response.provider,
-                "model": response.model,
+                **dict(response.trace_metadata()),
                 "validation": "passed",
                 "referenced_source_count": len(strategy.supporting_source_ids),
                 "duration_ms": duration_ms,
@@ -355,8 +354,7 @@ class ContentIntelligencePipeline:
             event="master_content_persisted",
             details={
                 "artifact_id": master_content.id,
-                "provider": response.provider,
-                "model": response.model,
+                **dict(response.trace_metadata()),
                 "validation": "passed",
                 "referenced_source_count": len(master_content.source_ids),
                 "duration_ms": duration_ms,
@@ -441,12 +439,21 @@ class ContentIntelligencePipeline:
         timestamp: datetime,
         duration_ms: int,
     ) -> GenerationMetadata:
+        usage = response.usage
         return GenerationMetadata(
             provider=response.provider,
             model=response.model,
             task=request.task.value,
             generated_at=timestamp,
             duration_ms=duration_ms,
+            requested_at=usage.requested_at if usage is not None else None,
+            provider_latency_ms=usage.latency_ms if usage is not None else None,
+            retry_count=usage.retry_count if usage is not None else 0,
+            input_tokens=usage.input_tokens if usage is not None else None,
+            output_tokens=usage.output_tokens if usage is not None else None,
+            total_tokens=usage.total_tokens if usage is not None else None,
+            estimated_cost=usage.estimated_cost if usage is not None else None,
+            cost_class=usage.cost_class.value if usage is not None else "unknown",
         )
 
     def _generate_structured(
@@ -464,7 +471,11 @@ class ContentIntelligencePipeline:
         except AIUnavailableError as exc:
             duration_ms = max(0, int((self._timer() - started_at) * 1_000))
             attempts = [
-                {"provider": item.provider, "outcome": item.outcome}
+                {
+                    "provider": item.provider,
+                    "outcome": item.outcome,
+                    "retry_count": item.retry_count,
+                }
                 for item in exc.attempts
             ]
             paused = self._pause_for_controlled_intervention(

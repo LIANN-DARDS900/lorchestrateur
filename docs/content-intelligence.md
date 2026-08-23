@@ -18,7 +18,8 @@ from the raw idea alone.
 - `ContentStrategy` stores objective, audience, angle, tone, intended outcome, and typed key messages.
   Every key message references at least one source ID.
 - `MasterContent` stores the canonical title, summary, body, key points, and source references.
-- `GenerationMetadata` stores provider, model, task, timestamp, and duration beside the artifact.
+- `GenerationMetadata` stores provider, model, task, timestamps, duration, optional token counts,
+  provider latency, retry count, cost classification, and optional cost beside the artifact.
 
 `reviewed` means the source has been reviewed for use in the pipeline; it does not assert that every
 claim is universally verified. Unreviewed evidence cannot support generated strategy or master
@@ -32,7 +33,8 @@ output objects, converted into domain objects, and checked deterministically aga
 evidence. AI never selects states, providers, paid-service policy, or validation outcomes.
 
 Missing providers, malformed structured output, and invalid source references pause the job for
-controlled intervention. They do not trigger automatic regeneration loops.
+controlled intervention. Gemini/OpenRouter failures are normalized before routing. Failures never
+authorize paid-provider use or trigger automatic regeneration loops.
 
 ## Persistence and privacy
 
@@ -45,7 +47,7 @@ status, and error codes. It excludes prompts, source excerpts, strategy text, an
 
 ## Deferred work
 
-- real Gemini, OpenRouter, or local-model adapters
+- local-model adapters
 - automated research and crawling
 - API/worker idempotency across external calls
 - publishing, analytics, and frontend

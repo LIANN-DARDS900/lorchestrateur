@@ -56,6 +56,14 @@ class GenerationMetadata:
     task: str
     generated_at: datetime
     duration_ms: int
+    requested_at: datetime | None = None
+    provider_latency_ms: int | None = None
+    retry_count: int = 0
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    estimated_cost: float | None = None
+    cost_class: str = "unknown"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "provider", _require_text("provider", self.provider))
@@ -66,6 +74,27 @@ class GenerationMetadata:
             raise ValueError("duration_ms must be an integer")
         if self.duration_ms < 0:
             raise ValueError("duration_ms cannot be negative")
+        if self.requested_at is not None:
+            _require_aware_datetime("requested_at", self.requested_at)
+        for name in ("provider_latency_ms", "input_tokens", "output_tokens", "total_tokens"):
+            value = getattr(self, name)
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool) or value < 0
+            ):
+                raise ValueError(f"{name} must be a non-negative integer when provided")
+        if not isinstance(self.retry_count, int) or isinstance(self.retry_count, bool):
+            raise ValueError("retry_count must be an integer")
+        if self.retry_count < 0:
+            raise ValueError("retry_count cannot be negative")
+        if self.estimated_cost is not None:
+            if not isinstance(self.estimated_cost, (int, float)) or isinstance(
+                self.estimated_cost, bool
+            ):
+                raise ValueError("estimated_cost must be numeric when provided")
+            if self.estimated_cost < 0:
+                raise ValueError("estimated_cost cannot be negative")
+        if self.cost_class not in {"free", "paid", "unknown"}:
+            raise ValueError("cost_class must be free, paid, or unknown")
 
 
 @dataclass(frozen=True, slots=True)

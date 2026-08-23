@@ -219,7 +219,11 @@ class OrchestrationService:
             )
         except AIUnavailableError as exc:
             attempts = [
-                {"provider": item.provider, "outcome": item.outcome}
+                {
+                    "provider": item.provider,
+                    "outcome": item.outcome,
+                    "retry_count": item.retry_count,
+                }
                 for item in exc.attempts
             ]
             paused, step = self._state_machine.pause(

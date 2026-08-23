@@ -176,8 +176,7 @@ class PlatformAdaptationPipeline:
                         "platform": platform_key,
                         "schema_version": platform.schema_version,
                         "error_code": error_code,
-                        "provider": response.provider,
-                        "model": response.model,
+                        **dict(response.trace_metadata()),
                         "duration_ms": duration_ms,
                         "revision": revision,
                     },
@@ -214,8 +213,7 @@ class PlatformAdaptationPipeline:
                     "platform": content.platform,
                     "format": content.format,
                     "schema_version": content.schema_version,
-                    "provider": response.provider,
-                    "model": response.model,
+                    **dict(response.trace_metadata()),
                     "duration_ms": duration_ms,
                     "revision": content.revision,
                 },
@@ -407,7 +405,11 @@ class PlatformAdaptationPipeline:
         except AIUnavailableError as exc:
             duration_ms = max(0, int((self._timer() - started_at) * 1_000))
             attempts = [
-                {"provider": attempt.provider, "outcome": attempt.outcome}
+                {
+                    "provider": attempt.provider,
+                    "outcome": attempt.outcome,
+                    "retry_count": attempt.retry_count,
+                }
                 for attempt in exc.attempts
             ]
             paused, step = self._state_machine.pause(
@@ -433,12 +435,21 @@ class PlatformAdaptationPipeline:
         timestamp: datetime,
         duration_ms: int,
     ) -> GenerationMetadata:
+        usage = response.usage
         return GenerationMetadata(
             provider=response.provider,
             model=response.model,
             task=request.task.value,
             generated_at=timestamp,
             duration_ms=duration_ms,
+            requested_at=usage.requested_at if usage is not None else None,
+            provider_latency_ms=usage.latency_ms if usage is not None else None,
+            retry_count=usage.retry_count if usage is not None else 0,
+            input_tokens=usage.input_tokens if usage is not None else None,
+            output_tokens=usage.output_tokens if usage is not None else None,
+            total_tokens=usage.total_tokens if usage is not None else None,
+            estimated_cost=usage.estimated_cost if usage is not None else None,
+            cost_class=usage.cost_class.value if usage is not None else "unknown",
         )
 
     @staticmethod

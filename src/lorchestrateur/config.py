@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from urllib.parse import urlparse
+
+from lorchestrateur.ai.contracts import ProviderCostClass
 
 
 class ConfigurationError(ValueError):
@@ -37,9 +40,52 @@ def _parse_quality_score(name: str, raw_value: str) -> int:
     return value
 
 
+def _parse_timeout(name: str, raw_value: str) -> float:
+    try:
+        value = float(raw_value.strip())
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be numeric") from exc
+    if not 0 < value <= 300:
+        raise ConfigurationError(f"{name} must be between 0 and 300 seconds")
+    return value
+
+
+def _parse_retries(name: str, raw_value: str) -> int:
+    try:
+        value = int(raw_value.strip())
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be an integer") from exc
+    if not 0 <= value <= 5:
+        raise ConfigurationError(f"{name} must be between 0 and 5")
+    return value
+
+
+def _parse_cost_class(name: str, raw_value: str) -> ProviderCostClass:
+    try:
+        return ProviderCostClass(raw_value.strip().lower())
+    except ValueError as exc:
+        allowed = ", ".join(item.value for item in ProviderCostClass)
+        raise ConfigurationError(f"{name} must be one of: {allowed}") from exc
+
+
+def _optional_value(raw_value: str | None) -> str | None:
+    normalized = raw_value.strip() if raw_value else ""
+    return normalized or None
+
+
+def _parse_base_url(name: str, raw_value: str) -> str:
+    value = raw_value.strip().rstrip("/")
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.query or parsed.fragment:
+        raise ConfigurationError(
+            f"{name} must be an HTTPS URL without query or fragment"
+        )
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
-    """Non-secret application settings loaded from an explicit environment mapping."""
+    """Runtime settings; secret fields are excluded from the dataclass representation."""
 
     app_env: str = "development"
     log_level: str = "INFO"
@@ -47,6 +93,20 @@ class Settings:
     allow_paid_ai: bool = False
     ai_provider_order: tuple[str, ...] = ("local", "gemini", "openrouter")
     platform_min_quality_score: int = 80
+    gemini_api_key: str | None = field(default=None, repr=False)
+    gemini_model: str = ""
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    gemini_timeout_seconds: float = 30.0
+    gemini_max_retries: int = 2
+    gemini_cost_class: ProviderCostClass = ProviderCostClass.UNKNOWN
+    gemini_enabled: bool = True
+    openrouter_api_key: str | None = field(default=None, repr=False)
+    openrouter_model: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_timeout_seconds: float = 30.0
+    openrouter_max_retries: int = 2
+    openrouter_cost_class: ProviderCostClass = ProviderCostClass.UNKNOWN
+    openrouter_enabled: bool = True
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
@@ -75,5 +135,46 @@ class Settings:
             platform_min_quality_score=_parse_quality_score(
                 "PLATFORM_MIN_QUALITY_SCORE",
                 source.get("PLATFORM_MIN_QUALITY_SCORE", "80"),
+            ),
+            gemini_api_key=_optional_value(source.get("GEMINI_API_KEY")),
+            gemini_model=source.get("GEMINI_MODEL", "").strip(),
+            gemini_base_url=_parse_base_url(
+                "GEMINI_BASE_URL",
+                source.get(
+                    "GEMINI_BASE_URL",
+                    "https://generativelanguage.googleapis.com/v1beta",
+                ),
+            ),
+            gemini_timeout_seconds=_parse_timeout(
+                "GEMINI_TIMEOUT_SECONDS", source.get("GEMINI_TIMEOUT_SECONDS", "30")
+            ),
+            gemini_max_retries=_parse_retries(
+                "GEMINI_MAX_RETRIES", source.get("GEMINI_MAX_RETRIES", "2")
+            ),
+            gemini_cost_class=_parse_cost_class(
+                "GEMINI_COST_CLASS", source.get("GEMINI_COST_CLASS", "unknown")
+            ),
+            gemini_enabled=_parse_bool(
+                "GEMINI_ENABLED", source.get("GEMINI_ENABLED", "true")
+            ),
+            openrouter_api_key=_optional_value(source.get("OPENROUTER_API_KEY")),
+            openrouter_model=source.get("OPENROUTER_MODEL", "").strip(),
+            openrouter_base_url=_parse_base_url(
+                "OPENROUTER_BASE_URL",
+                source.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            ),
+            openrouter_timeout_seconds=_parse_timeout(
+                "OPENROUTER_TIMEOUT_SECONDS",
+                source.get("OPENROUTER_TIMEOUT_SECONDS", "30"),
+            ),
+            openrouter_max_retries=_parse_retries(
+                "OPENROUTER_MAX_RETRIES", source.get("OPENROUTER_MAX_RETRIES", "2")
+            ),
+            openrouter_cost_class=_parse_cost_class(
+                "OPENROUTER_COST_CLASS",
+                source.get("OPENROUTER_COST_CLASS", "unknown"),
+            ),
+            openrouter_enabled=_parse_bool(
+                "OPENROUTER_ENABLED", source.get("OPENROUTER_ENABLED", "true")
             ),
         )

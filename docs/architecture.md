@@ -4,7 +4,7 @@
 
 Maintain a small, production-minded core that makes workflow and content-intelligence execution
 explicit, traceable, and safe to extend. The project deliberately avoids an HTTP framework,
-background queue, production AI SDKs, publishing adapters, analytics, and a frontend for now.
+background queue, AI framework/SDK coupling, publishing adapters, analytics, and a frontend for now.
 
 ## Technology decision
 
@@ -20,8 +20,9 @@ workflow changes.
    infrastructure.
 2. **Application** — a public orchestration facade plus focused content-intelligence and platform-
    adaptation pipelines. Each use case atomically persists its artifact, state, and trace step.
-3. **AI** — provider protocol, request/response contracts, routing policy, and a deterministic fake.
-   The router filters paid providers before availability or generation calls.
+3. **AI** — provider protocol, typed request/response/usage contracts, routing policy, deterministic
+   fake, shared HTTP execution boundary, and isolated Gemini/OpenRouter adapters. The router filters
+   unconfigured and paid providers before availability or generation calls.
 4. **Platforms** — registry-based modules with a typed/versioned payload, adaptation guidance,
    strict parser, deterministic validator, and transparent scorer. Adding a platform requires one
    module and registration, not orchestration conditionals.
@@ -29,14 +30,16 @@ workflow changes.
    version check and store the corresponding checkpoint in the same transaction.
 
 Dependencies point inward: adapters know core contracts; the domain does not know SQLite, provider
-SDKs, web frameworks, or social networks.
+SDKs, web frameworks, or social networks. Production adapters use an injected standard-library HTTP
+transport; provider-specific payloads and response extraction do not enter application orchestration.
 
 ## Workflow and failure policy
 
 The state machine permits only the documented forward path. Non-terminal work may pause with a
 `paused_from` checkpoint or fail with a reason. Resume restores the checkpoint state. AI routing
-failure is an expected pause, not permission to enable a paid provider. Unexpected programming
-errors remain visible rather than being converted into misleading content.
+failure is an expected pause, not permission to enable a paid provider. Authentication, rate-limit,
+timeout, transient, permanent, and malformed-response outcomes remain classified. Unexpected
+programming errors remain visible rather than being converted into misleading content.
 
 Platform validation permits one controlled loop:
 
@@ -54,7 +57,7 @@ quality threshold; valid variants are retained.
 
 ## Trace and persistence model
 
-The schema contains only the records required through Platform Adaptation V1:
+The schema contains only the records required through Production AI V1:
 
 - `content_jobs` — current checkpoint, version, targets, repair count, and timestamps
 - `job_steps` — ordered transition/event trace with non-secret structured metadata
@@ -69,16 +72,19 @@ not written into generic trace metadata. No generic AI-request table exists beca
 metadata has a clear home on the durable artifact; richer request auditing should be added only with
 an approved retention policy.
 
+Generation metadata may contain token counts, provider latency, retry count, request time, declared
+cost class, and optional provider-reported cost. It never contains credentials, prompts, evidence
+excerpts, Authorization headers, response bodies, or generated content.
+
 ## Extension plan
 
 Near-term additions should preserve these boundaries:
 
-1. Add a local/free provider adapter and one opt-in hosted-provider adapter behind `AIProvider`.
-2. Add an API composition layer and idempotent worker execution around application use cases.
-3. Introduce migration tooling and a PostgreSQL repository when deployment requires it.
-4. Add publishing adapters only after per-platform credentials, idempotency, retry, and audit policies
+1. Add an API composition layer and idempotent worker execution around application use cases.
+2. Introduce migration tooling and a PostgreSQL repository when deployment requires it.
+3. Add publishing adapters only after per-platform credentials, idempotency, retry, and audit policies
    are approved.
-5. Add delivery receipts and publication reconciliation before analytics or a learning loop.
+4. Add delivery receipts and publication reconciliation before analytics or a learning loop.
 
 ## Product-owner decisions still needed
 

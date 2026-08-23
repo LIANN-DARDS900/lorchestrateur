@@ -89,7 +89,8 @@ excerpts, credentials, and API keys. Full content remains in `platform_contents`
 - The built-in format limits are product-policy rules for this phase, not live entitlement lookup.
 - Reference-integrity checks prove that cited IDs are approved; they do not prove semantic
   entailment for every generated sentence.
-- No production AI provider adapter is included; automated tests use deterministic fakes.
+- Production adapters remain optional; deterministic fakes and mocked HTTP transports keep tests
+  offline and quota-free.
 - Worker-level concurrency across multiple processes is limited to repository uniqueness and job
   optimistic locking; there is no distributed queue or lease service.
 - Internal-link suggestions are content recommendations only and are not resolved against a site.

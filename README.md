@@ -4,10 +4,10 @@ L'Orchestrateur is a deterministic-first system for governed content intelligenc
 orchestration. It turns an idea and reviewed evidence into a structured strategy and durable
 canonical master content—not autonomous agent conversations.
 
-> **Project status:** Platform Adaptation V1. The repository implements an evidence-aware pipeline
-> from canonical master content through governed Blog, X, Instagram, and Facebook variants that are
-> ready for explicit human approval. Publishing, analytics, production AI providers, an API, and a
-> frontend are not implemented.
+> **Project status:** Production AI V1. The repository implements an evidence-aware pipeline using
+> governed Gemini and OpenRouter adapters, free-first routing, typed structured generation, and
+> durable Blog, X, Instagram, and Facebook variants ready for explicit human approval. Publishing,
+> analytics, automated research, an API, and a frontend are not implemented.
 
 ## Current foundation
 
@@ -22,6 +22,10 @@ canonical master content—not autonomous agent conversations.
 - Deterministic platform validation plus an explainable five-part quality score
 - Configurable quality thresholds before any variant can become approval-ready
 - A provider-independent AI contract and deterministic router
+- Governed Gemini and OpenRouter HTTP adapters with strict structured-response parsing
+- Deterministic multi-provider ordering and classified fallback after eligible-provider failures
+- Finite provider timeouts and bounded retries for rate limits and transient failures
+- Optional token, latency, retry, request-time, and cost-class metadata on durable artifacts
 - Paid AI disabled by default through `ALLOW_PAID_AI=false`
 - Graceful workflow pausing when no eligible AI provider is available
 - A deterministic fake AI provider for tests and local integration work
@@ -46,9 +50,9 @@ Active stages can transition to `paused` or `failed`. A paused job retains the s
 paused so it can resume at that checkpoint. Failed and published jobs are terminal. Validation can
 request one controlled return to `adapting_platforms`; another failed validation pauses the job.
 
-The implemented Phase 3 pipeline stops at `awaiting_approval` after every requested platform has a
-persisted latest revision that passes mandatory validation and the configured quality threshold.
-It does not publish platform variants.
+The implemented production-AI pipeline stops at `awaiting_approval` after every requested platform
+has a persisted latest revision that passes mandatory validation and the configured quality
+threshold. It does not publish platform variants.
 
 ## Responsibility boundary
 
@@ -66,7 +70,7 @@ providers, persist jobs, or change states.
 
 ```text
 src/lorchestrateur/
-  ai/            provider contracts, routing policy, deterministic fake
+  ai/            provider contracts, routing policy, production adapters, deterministic fake
   application/   orchestration facade and focused content-intelligence pipeline
   domain/        workflow, evidence, master/platform content, validation, quality policy
   persistence/   repository contract, in-memory and SQLite adapters
@@ -78,7 +82,8 @@ docs/            architecture decisions and delivery plan
 
 ## Local development
 
-Python 3.11 or newer is required. The runtime package has no third-party dependencies.
+Python 3.11 or newer is required. The runtime package has no third-party dependencies; production
+providers use the standard-library HTTPS client through a small injectable transport boundary.
 
 ```bash
 python -m venv .venv
@@ -104,9 +109,40 @@ not contain credentials or automatically send credentials to clients.
 | `ALLOW_PAID_AI` | `false` | Explicit paid-provider authorization |
 | `AI_PROVIDER_ORDER` | `local,gemini,openrouter` | Deterministic routing preference |
 | `PLATFORM_MIN_QUALITY_SCORE` | `80` | Approval-ready quality threshold from 0 to 100 |
+| `GEMINI_ENABLED` | `true` | Operational Gemini availability switch |
+| `GEMINI_API_KEY` | empty | Gemini credential; never logged or traced |
+| `GEMINI_MODEL` | empty | Explicit Gemini model identifier |
+| `GEMINI_BASE_URL` | Google Gemini API | HTTPS endpoint base |
+| `GEMINI_TIMEOUT_SECONDS` | `30` | Finite request timeout |
+| `GEMINI_MAX_RETRIES` | `2` | Transient retries, from 0 to 5 |
+| `GEMINI_COST_CLASS` | `unknown` | Declared `free`, `paid`, or `unknown` cost class |
+| `OPENROUTER_ENABLED` | `true` | Operational OpenRouter availability switch |
+| `OPENROUTER_API_KEY` | empty | OpenRouter credential; never logged or traced |
+| `OPENROUTER_MODEL` | empty | Explicit OpenRouter model identifier |
+| `OPENROUTER_BASE_URL` | OpenRouter API | HTTPS endpoint base |
+| `OPENROUTER_TIMEOUT_SECONDS` | `30` | Finite request timeout |
+| `OPENROUTER_MAX_RETRIES` | `2` | Transient retries, from 0 to 5 |
+| `OPENROUTER_COST_CLASS` | `unknown` | Declared `free`, `paid`, or `unknown` cost class |
 
-No Gemini, OpenRouter, social publishing, or analytics adapter is implemented yet. Provider names
-in the default order reserve stable configuration identifiers for future adapters.
+Cost classification is configuration-driven. Only `free` is eligible while paid AI is disabled;
+both `paid` and `unknown` fail closed. A model name or provider label never implies permanent free
+availability. Full setup and failure behavior are documented in
+[docs/production-ai.md](docs/production-ai.md).
+
+## Opt-in real-provider smoke test
+
+Copy `.env.example` to a Git-ignored `.env`, configure at least one API key and model, explicitly
+classify that model's current cost, then run:
+
+```bash
+python -m lorchestrateur.smoke_test
+```
+
+From a source checkout without an editable install, set `PYTHONPATH=src` first. The command prints
+paid-AI policy and provider/model selection before execution, uses local reviewed evidence, runs a
+small end-to-end workflow, and stops at `AWAITING_APPROVAL`. Missing credentials or a lack of an
+eligible provider fails before any API call. Generated content is hidden unless `--verbose` is
+explicitly supplied. This command is never invoked by the automated suite and never publishes.
 
 ## Programmatic pipeline
 
@@ -126,7 +162,7 @@ service.evaluate_platform_adaptations(job.id)
 The generation methods require an `AIRouter`. `adapt_platforms` persists typed pending revisions;
 `evaluate_platform_adaptations` applies deterministic validation and scoring, then either requests
 one targeted repair, pauses, or advances to `awaiting_approval`. Tests use `FakeAIProvider`; no
-external provider or credentials are required.
+external provider or credentials are required for automated tests.
 
 ## Testing
 
@@ -151,12 +187,17 @@ The automated suite covers:
 - configurable minimum-quality gating and missing-platform protection
 - targeted repair success and repair-budget exhaustion
 - invalid structured output and unavailable-provider pausing
+- mocked Gemini and OpenRouter success, authentication, rate-limit, timeout, transient, and malformed
+  response behavior
+- bounded retry counts, classified router fallback, free-first policy, and provider ordering
+- mocked real-provider execution through strategy, master content, every platform, and quality gates
+- opt-in smoke-test preflight safety without external requests
 
-Tests use only local fakes and require no API credentials or paid services.
+Tests use only local fakes and in-memory HTTP transports; they require no API credentials, network
+access, provider quota, or paid services.
 
 ## Deliberately out of scope for this phase
 
-- Production AI provider integrations
 - Automated web research/crawling
 - Social network and blog publishing
 - Image or video generation for Instagram concepts

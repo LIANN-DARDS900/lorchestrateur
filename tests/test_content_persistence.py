@@ -16,7 +16,6 @@ from lorchestrateur.domain.workflow import ContentJob, ContentJobState, StateMac
 from lorchestrateur.persistence.memory import InMemoryContentJobRepository
 from lorchestrateur.persistence.sqlite import SQLiteContentJobRepository
 
-
 NOW = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
 
 
@@ -66,6 +65,14 @@ class ContentArtifactPersistenceTests(unittest.TestCase):
             task="content_strategy",
             generated_at=NOW,
             duration_ms=12,
+            requested_at=NOW,
+            provider_latency_ms=10,
+            retry_count=1,
+            input_tokens=20,
+            output_tokens=30,
+            total_tokens=50,
+            estimated_cost=0.0,
+            cost_class="free",
         )
         content_strategy = ContentStrategy(
             id=f"strategy-{type(repository).__name__}",

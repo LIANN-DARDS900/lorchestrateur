@@ -15,6 +15,24 @@ class StructuredOutputError(ValueError):
         super().__init__(message)
 
 
+def _require_exact_fields(
+    payload: Mapping[str, Any], *, required: set[str], optional: set[str] | None = None
+) -> None:
+    actual = set(payload)
+    missing = required - actual
+    if missing:
+        raise StructuredOutputError(
+            "invalid_required_field",
+            f"structured output is missing fields: {', '.join(sorted(missing))}",
+        )
+    unexpected = actual - required - (optional or set())
+    if unexpected:
+        raise StructuredOutputError(
+            "unexpected_fields",
+            f"structured output contains unexpected fields: {', '.join(sorted(unexpected))}",
+        )
+
+
 def _require_text(payload: Mapping[str, Any], field_name: str) -> str:
     value = payload.get(field_name)
     if not isinstance(value, str) or not value.strip():
@@ -78,12 +96,24 @@ class ContentStrategyOutput:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> ContentStrategyOutput:
+        _require_exact_fields(
+            payload,
+            required={
+                "objective",
+                "target_audience",
+                "angle",
+                "tone",
+                "key_messages",
+                "intended_outcome",
+            },
+        )
         key_messages: list[StrategyKeyMessageOutput] = []
         for item in _require_sequence(payload, "key_messages"):
             if not isinstance(item, Mapping):
                 raise StructuredOutputError(
                     "invalid_key_message", "each key message must be an object"
                 )
+            _require_exact_fields(item, required={"message", "source_ids"})
             key_messages.append(
                 StrategyKeyMessageOutput(
                     message=_require_text(item, "message"),
@@ -115,6 +145,10 @@ class MasterContentOutput:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> MasterContentOutput:
+        _require_exact_fields(
+            payload,
+            required={"title", "summary", "body", "key_points", "source_ids"},
+        )
         key_points: list[str] = []
         for item in _require_sequence(payload, "key_points"):
             if not isinstance(item, str) or not item.strip():

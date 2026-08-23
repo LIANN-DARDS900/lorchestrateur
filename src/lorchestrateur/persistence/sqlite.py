@@ -565,6 +565,18 @@ class SQLiteContentJobRepository:
                 "task": metadata.task,
                 "generated_at": metadata.generated_at.isoformat(),
                 "duration_ms": metadata.duration_ms,
+                "requested_at": (
+                    metadata.requested_at.isoformat()
+                    if metadata.requested_at is not None
+                    else None
+                ),
+                "provider_latency_ms": metadata.provider_latency_ms,
+                "retry_count": metadata.retry_count,
+                "input_tokens": metadata.input_tokens,
+                "output_tokens": metadata.output_tokens,
+                "total_tokens": metadata.total_tokens,
+                "estimated_cost": metadata.estimated_cost,
+                "cost_class": metadata.cost_class,
             },
             sort_keys=True,
         )
@@ -769,4 +781,16 @@ class SQLiteContentJobRepository:
             task=payload["task"],
             generated_at=datetime.fromisoformat(payload["generated_at"]),
             duration_ms=payload["duration_ms"],
+            requested_at=(
+                datetime.fromisoformat(payload["requested_at"])
+                if payload.get("requested_at") is not None
+                else None
+            ),
+            provider_latency_ms=payload.get("provider_latency_ms"),
+            retry_count=payload.get("retry_count", 0),
+            input_tokens=payload.get("input_tokens"),
+            output_tokens=payload.get("output_tokens"),
+            total_tokens=payload.get("total_tokens"),
+            estimated_cost=payload.get("estimated_cost"),
+            cost_class=payload.get("cost_class", "unknown"),
         )
