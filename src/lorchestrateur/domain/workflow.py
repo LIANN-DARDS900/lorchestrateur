@@ -144,6 +144,19 @@ class StateMachine:
             raise StateTransitionError(f"cannot transition from {job.state} to {target}")
         return self._apply(job, target, event=event, details=details)
 
+    def record_event(
+        self,
+        job: ContentJob,
+        *,
+        event: str,
+        details: Mapping[str, Any] | None = None,
+    ) -> tuple[ContentJob, JobStep]:
+        if job.state in TERMINAL_STATES:
+            raise StateTransitionError(f"cannot record work for a job in state {job.state}")
+        if not event.strip():
+            raise ValueError("event cannot be empty")
+        return self._apply(job, job.state, event=event, details=details)
+
     def pause(
         self,
         job: ContentJob,

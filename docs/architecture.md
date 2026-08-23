@@ -1,10 +1,10 @@
-# Orchestration V1 Architecture Plan
+# L'Orchestrateur Architecture
 
 ## Objective
 
-Establish a small, production-minded core that makes workflow execution explicit, traceable, and
-safe to extend. This phase deliberately avoids an HTTP framework, background queue, production AI
-SDKs, publishing adapters, analytics, and a frontend.
+Maintain a small, production-minded core that makes workflow and content-intelligence execution
+explicit, traceable, and safe to extend. The project deliberately avoids an HTTP framework,
+background queue, production AI SDKs, publishing adapters, analytics, and a frontend for now.
 
 ## Technology decision
 
@@ -15,10 +15,10 @@ workflow changes.
 
 ## Layer boundaries
 
-1. **Domain** — immutable content jobs, legal state transitions, repair limit, validation results,
-   and trace-step creation. It imports no infrastructure.
-2. **Application** — explicit use cases that coordinate one workflow action, then atomically persist
-   the resulting state and trace step.
+1. **Domain** — immutable jobs, evidence, strategies, master content, legal transitions, and
+   deterministic validators. It imports no infrastructure.
+2. **Application** — a public orchestration facade plus a focused content-intelligence pipeline.
+   Each use case atomically persists its artifact, state, and trace step.
 3. **AI** — provider protocol, request/response contracts, routing policy, and a deterministic fake.
    The router filters paid providers before availability or generation calls.
 4. **Platforms** — registry-based platform definitions with schema, adaptation guidance, and
@@ -47,20 +47,24 @@ actor trace before publishing.
 
 ## Trace and persistence model
 
-The minimum schema contains only:
+The schema contains only the records required through Content Intelligence V1:
 
 - `content_jobs` — current checkpoint, version, targets, repair count, and timestamps
 - `job_steps` — ordered transition/event trace with non-secret structured metadata
+- `sources` — manually or externally injected evidence and review status
+- `content_strategies` — validated structured strategy, one per content job
+- `master_contents` — validated canonical content, one per content job
 
-State update and step insertion are atomic. Prompts and generated content are not written into trace
-metadata. Dedicated source, content, approval, AI-request, publication, and analytics records should
-be introduced only with the use cases that own their retention and privacy rules.
+Artifact, state update, and step insertion are atomic. Prompts, excerpts, and generated content are
+not written into generic trace metadata. No generic AI-request table exists because generation
+metadata has a clear home on the durable artifact; richer request auditing should be added only with
+an approved retention policy.
 
 ## Extension plan
 
 Near-term additions should preserve these boundaries:
 
-1. Define durable master-content and platform-content records plus approval decisions.
+1. Define durable platform-content records and platform adaptation contracts.
 2. Add a local/free provider adapter and one opt-in hosted-provider adapter behind `AIProvider`.
 3. Add an API composition layer and idempotent worker execution around application use cases.
 4. Introduce migration tooling and a PostgreSQL repository when deployment requires it.

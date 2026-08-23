@@ -1,19 +1,21 @@
 # L'Orchestrateur
 
-L'Orchestrateur is a deterministic-first foundation for governed multi-channel content
-orchestration. Its intended workflow turns a strategic idea into traceable, platform-specific
-content through explicit validation and human approval—not autonomous agent conversations.
+L'Orchestrateur is a deterministic-first system for governed content intelligence and multi-channel
+orchestration. It turns an idea and reviewed evidence into a structured strategy and durable
+canonical master content—not autonomous agent conversations.
 
-> **Project status:** early orchestration foundation. The repository currently provides domain
-> contracts, state management, AI routing policy, platform validation, local persistence, and
-> automated tests. It does not yet publish content, call production AI providers, expose an API,
-> or collect analytics.
+> **Project status:** Content Intelligence V1. The repository implements an evidence-aware pipeline
+> through canonical master-content persistence. Platform adaptation, publishing, production AI
+> providers, analytics, an API, and a frontend are not implemented yet.
 
 ## Current foundation
 
 - A strict content-job state machine with resumable pause checkpoints
-- Atomic state and trace-step persistence through in-memory and SQLite adapters
+- Durable source evidence, structured content strategies, and canonical master content
+- Atomic artifact/state/trace persistence through in-memory and SQLite adapters
 - Optimistic version checks to prevent silent concurrent updates
+- Typed, versioned AI output schemas for strategy and master-content generation
+- Evidence-reference integrity checks for strategy messages and canonical content
 - A provider-independent AI contract and deterministic router
 - Paid AI disabled by default through `ALLOW_PAID_AI=false`
 - Graceful workflow pausing when no eligible AI provider is available
@@ -23,7 +25,8 @@ content through explicit validation and human approval—not autonomous agent co
 - One controlled repair attempt before the workflow pauses for intervention
 - Explicit human-approval recording before publishing can begin
 
-The concise architecture plan is in [docs/architecture.md](docs/architecture.md).
+Architecture details are in [docs/architecture.md](docs/architecture.md) and
+[docs/content-intelligence.md](docs/content-intelligence.md).
 
 ## Workflow model
 
@@ -37,12 +40,15 @@ Active stages can transition to `paused` or `failed`. A paused job retains the s
 paused so it can resume at that checkpoint. Failed and published jobs are terminal. Validation can
 request one controlled return to `adapting_platforms`; another failed validation pauses the job.
 
+The implemented Phase 2 pipeline stops at `adapting_platforms` after validated `MasterContent` has
+been persisted. It does not create or publish platform variants yet.
+
 ## Responsibility boundary
 
-Normal application logic owns workflow transitions, provider eligibility, repair budgets, platform
-constraints, validation, persistence, trace records, and approval gates. AI is reserved for the
-language tasks represented by `strategic_angle`, `master_content`, `platform_adaptation`, and
-`controlled_rewrite` requests.
+Normal application logic owns workflow transitions, source eligibility, reference integrity,
+provider eligibility, repair budgets, validation, persistence, trace records, and approval gates.
+AI is bounded to typed `content_strategy` and `master_content` generation in Phase 2, alongside the
+foundation's future-facing language-task contracts.
 
 Provider adapters cannot decide workflow state or bypass paid-provider policy. Platform modules do
 not route providers or persist jobs.
@@ -52,8 +58,8 @@ not route providers or persist jobs.
 ```text
 src/lorchestrateur/
   ai/            provider contracts, routing policy, deterministic fake
-  application/   explicit orchestration use cases
-  domain/        workflow states, transitions, validation results
+  application/   orchestration facade and focused content-intelligence pipeline
+  domain/        workflow, evidence, strategy, master content, validation
   persistence/   repository contract, in-memory and SQLite adapters
   platforms/     platform contract, registry, initial definitions
   config.py      environment-backed non-secret settings
@@ -92,9 +98,25 @@ not contain credentials or automatically send credentials to clients.
 No Gemini, OpenRouter, social publishing, or analytics adapter is implemented yet. Provider names
 in the default order reserve stable configuration identifiers for future adapters.
 
+## Programmatic pipeline
+
+`OrchestrationService` now exposes the Phase 2 sequence:
+
+```python
+job = service.create_job(...)
+service.begin_research(job.id)
+service.add_source(..., evidence_status=EvidenceStatus.REVIEWED)
+service.complete_research(job.id)
+service.generate_content_strategy(job.id)
+service.generate_master_content(job.id)
+```
+
+The generation methods require an `AIRouter`. Tests use `FakeAIProvider` with typed structured
+outputs; no external provider or credentials are required.
+
 ## Testing
 
-The initial suite covers:
+The automated suite covers:
 
 - legal and illegal workflow transitions
 - pause/resume and terminal failure behavior
@@ -105,14 +127,19 @@ The initial suite covers:
 - configuration parsing and fail-closed behavior
 - SQLite round trips and concurrent-update protection
 - human-approval trace recording
+- source, strategy, and master-content persistence
+- structured AI schema validation
+- reviewed-evidence and source-reference integrity
+- end-to-end strategy and master-content generation
+- invalid structured output and unavailable-provider pausing
 
 Tests use only local fakes and require no API credentials or paid services.
 
 ## Deliberately out of scope for this phase
 
 - Production AI provider integrations
-- Research-source integrations and source storage
-- Master and platform-content persistence
+- Automated web research/crawling
+- Platform-specific content adaptation
 - Social network and blog publishing
 - Scheduling, analytics, experiments, and learning loops
 - Public API, worker runtime, and frontend

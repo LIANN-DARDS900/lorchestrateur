@@ -1,15 +1,32 @@
-"""Explicit orchestration use cases; no autonomous agent communication."""
+"""Public orchestration use cases composed from focused application components."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
+from time import perf_counter
+from typing import Any
+from uuid import uuid4
 
 from lorchestrateur.ai.contracts import AIRequest, AIResponse
 from lorchestrateur.ai.router import AIRouter, AIUnavailableError
+from lorchestrateur.application.content_intelligence import (
+    ContentIntelligencePipeline,
+    MasterContentGenerationOutcome,
+    ResearchCompletionOutcome,
+    SourceAdditionOutcome,
+    StrategyGenerationOutcome,
+)
+from lorchestrateur.domain.content import EvidenceStatus, SourceType
 from lorchestrateur.domain.validation import ValidationResult
-from lorchestrateur.domain.workflow import ContentJob, ContentJobState, StateMachine
-from lorchestrateur.persistence.contracts import ContentJobRepository
+from lorchestrateur.domain.workflow import (
+    ContentJob,
+    ContentJobState,
+    StateMachine,
+    utc_now,
+)
+from lorchestrateur.persistence.contracts import ContentIntelligenceRepository
 from lorchestrateur.platforms.contracts import PlatformContent
 from lorchestrateur.platforms.registry import PlatformRegistry
 
@@ -49,16 +66,27 @@ class OrchestrationService:
 
     def __init__(
         self,
-        repository: ContentJobRepository,
+        repository: ContentIntelligenceRepository,
         state_machine: StateMachine,
         platforms: PlatformRegistry,
         *,
         ai_router: AIRouter | None = None,
+        clock: Callable[[], datetime] = utc_now,
+        id_factory: Callable[[], str] = lambda: str(uuid4()),
+        timer: Callable[[], float] = perf_counter,
     ) -> None:
         self._repository = repository
         self._state_machine = state_machine
         self._platforms = platforms
         self._ai_router = ai_router
+        self._content_intelligence = ContentIntelligencePipeline(
+            repository,
+            state_machine,
+            ai_router=ai_router,
+            clock=clock,
+            id_factory=id_factory,
+            timer=timer,
+        )
 
     def create_job(
         self,
@@ -78,6 +106,43 @@ class OrchestrationService:
             self._platforms.get(platform)
         self._repository.add(job)
         return job
+
+    def begin_research(self, job_id: str) -> ContentJob:
+        return self._content_intelligence.begin_research(job_id)
+
+    def add_source(
+        self,
+        job_id: str,
+        *,
+        title: str,
+        relevant_excerpt: str,
+        source_type: SourceType,
+        url: str | None = None,
+        retrieved_at: datetime | None = None,
+        evidence_status: EvidenceStatus = EvidenceStatus.UNVERIFIED,
+        metadata: Mapping[str, Any] | None = None,
+        source_id: str | None = None,
+    ) -> SourceAdditionOutcome:
+        return self._content_intelligence.add_source(
+            job_id,
+            title=title,
+            relevant_excerpt=relevant_excerpt,
+            source_type=source_type,
+            url=url,
+            retrieved_at=retrieved_at,
+            evidence_status=evidence_status,
+            metadata=metadata,
+            source_id=source_id,
+        )
+
+    def complete_research(self, job_id: str) -> ResearchCompletionOutcome:
+        return self._content_intelligence.complete_research(job_id)
+
+    def generate_content_strategy(self, job_id: str) -> StrategyGenerationOutcome:
+        return self._content_intelligence.generate_content_strategy(job_id)
+
+    def generate_master_content(self, job_id: str) -> MasterContentGenerationOutcome:
+        return self._content_intelligence.generate_master_content(job_id)
 
     def transition(
         self,
@@ -101,6 +166,7 @@ class OrchestrationService:
         *,
         preferred_provider: str | None = None,
     ) -> AIStageOutcome:
+        """Phase 1 compatibility path; durable Phase 2 stages use dedicated methods."""
         current = self._repository.get(job_id)
         target = _AI_STAGE_TRANSITIONS.get(current.state)
         if target is None:

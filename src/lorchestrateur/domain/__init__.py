@@ -1,5 +1,21 @@
 """Core domain models and deterministic business rules."""
 
+from lorchestrateur.domain.content import (
+    ContentStrategy,
+    EvidenceStatus,
+    GenerationMetadata,
+    MasterContent,
+    SourceEvidence,
+    SourceType,
+    StrategyKeyMessage,
+)
+from lorchestrateur.domain.content_validation import (
+    ContentValidationError,
+    validate_master_content,
+    validate_research_sources,
+    validate_source,
+    validate_strategy,
+)
 from lorchestrateur.domain.validation import ValidationIssue, ValidationResult
 from lorchestrateur.domain.workflow import (
     ContentJob,
@@ -10,12 +26,23 @@ from lorchestrateur.domain.workflow import (
 )
 
 __all__ = [
+    "ContentStrategy",
+    "ContentValidationError",
     "ContentJob",
     "ContentJobState",
+    "EvidenceStatus",
+    "GenerationMetadata",
     "JobStep",
+    "MasterContent",
+    "SourceEvidence",
+    "SourceType",
     "StateMachine",
     "StateTransitionError",
+    "StrategyKeyMessage",
     "ValidationIssue",
     "ValidationResult",
+    "validate_master_content",
+    "validate_research_sources",
+    "validate_source",
+    "validate_strategy",
 ]
-
