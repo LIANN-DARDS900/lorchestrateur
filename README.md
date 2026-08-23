@@ -4,11 +4,12 @@ L'Orchestrateur is a deterministic-first system for governed content intelligenc
 orchestration. It turns an idea and reviewed evidence into a structured strategy and durable
 canonical master content—not autonomous agent conversations.
 
-> **Project status:** Application UI V1. The repository implements an evidence-aware pipeline using
+> **Project status:** Governed Publishing V1. The repository implements an evidence-aware pipeline using
 > governed Gemini and OpenRouter adapters, free-first routing, typed structured generation, and a
 > professional local French web application for creating, reviewing, and approving durable Blog,
-> X, Instagram, and Facebook variants. Publishing, analytics, scheduling, automated research, and
-> enterprise authentication are not implemented.
+> X, Instagram, and Facebook variants. Approved content can be previewed, simulated, scheduled, and
+> delivered through governed publication adapters with durable receipts. Analytics, automated
+> research, media generation, remote deletion, and enterprise authentication are not implemented.
 
 ## Current foundation
 
@@ -38,6 +39,13 @@ canonical master content—not autonomous agent conversations.
 - A server-rendered French application for content creation, evidence review, artifact inspection,
   quality governance, controlled revision, and explicit approval
 - A visibly labelled deterministic demo mode that requires no provider credentials or quota
+- Explicit approved-only publication authorization with a separate confirmation boundary
+- Registry-based X, Facebook, Instagram, Blog export, and deterministic demo publishers
+- Safe-by-default dry-run policy and globally disabled live publishing
+- Durable timezone-aware schedules with an opt-in local SQLite worker
+- Atomic work claims, expiring leases, bounded retries, and uncertain-outcome reconciliation
+- Per-item delivery receipts and resumable partial X threads
+- An explicit Instagram media-attachment boundary without media generation or blob storage
 
 Architecture details are in [docs/architecture.md](docs/architecture.md) and
 [docs/content-intelligence.md](docs/content-intelligence.md).
@@ -54,10 +62,11 @@ Active stages can transition to `paused` or `failed`. A paused job retains the s
 paused so it can resume at that checkpoint. Failed and published jobs are terminal. Validation can
 request one controlled return to `adapting_platforms`; another failed validation pauses the job.
 
-The implemented production-AI pipeline stops at `awaiting_approval` after every requested platform
+The production-AI pipeline stops at `awaiting_approval` after every requested platform
 has a persisted latest revision that passes mandatory validation and the configured quality
-threshold. The application can record an explicit approval and then stops at `approved`; it does
-not publish platform variants.
+threshold. Approval records an editorial decision. A separate publication decision can then create
+a simulation, durable schedule, or delivery request. Global `published` is reached only after every
+requested platform has a successful non-dry-run receipt.
 
 ## Responsibility boundary
 
@@ -80,7 +89,9 @@ src/lorchestrateur/
   domain/        workflow, evidence, master/platform content, validation, quality policy
   persistence/   repository contract, in-memory and SQLite adapters
   platforms/     platform contract, registry, initial definitions
+  publishing/    contracts, registry, safety service, live/demo platform adapters
   web/           Flask adapter, presenters, French templates, demo composition, static assets
+  worker.py      durable SQLite schedule polling and claim execution
   config.py      environment-backed non-secret settings
 tests/           standard-library automated test suite
 docs/            architecture decisions and delivery plan
@@ -134,6 +145,12 @@ not contain credentials or automatically send credentials to clients.
 | `OPENROUTER_TIMEOUT_SECONDS` | `30` | Finite request timeout |
 | `OPENROUTER_MAX_RETRIES` | `2` | Transient retries, from 0 to 5 |
 | `OPENROUTER_COST_CLASS` | `unknown` | Declared `free`, `paid`, or `unknown` cost class |
+| `PUBLISHING_ENABLED` | `false` | Explicit external-delivery authorization |
+| `PUBLISHING_DRY_RUN` | `true` | Validate and prepare without external publication |
+| `PUBLISHING_ADAPTER_MODE` | `demo` | Deterministic demo publishers or explicitly configured real adapters |
+| `APP_TIMEZONE` | `Africa/Casablanca` | IANA timezone used by the scheduling UI |
+| `PUBLISHING_LEASE_SECONDS` | `120` | Expiring durable work-claim duration |
+| `PUBLISHING_POLL_SECONDS` | `10` | Local worker polling interval |
 
 Cost classification is configuration-driven. Only `free` is eligible while paid AI is disabled;
 both `paid` and `unknown` fail closed. A model name or provider label never implies permanent free
@@ -155,7 +172,14 @@ python -m lorchestrateur.web
 
 Open `http://127.0.0.1:5000`. Create a content workflow, add at least one source marked as reviewed,
 launch orchestration, inspect the strategy, canonical master content, four channel adaptations and
-quality breakdowns, then approve. The interface clearly states that approval does not publish.
+quality breakdowns, then approve. The publication workspace keeps approval and delivery as separate
+human decisions. Defaults remain demo plus dry run, so no external delivery occurs.
+
+For a complete no-network delivery demonstration, explicitly set
+`PUBLISHING_ADAPTER_MODE=demo` and `PUBLISHING_DRY_RUN=false`. Instagram still requires ordered
+media URL metadata. Start durable schedule processing with `python -m lorchestrateur.worker`; add
+`--once` for one polling pass. See [docs/publishing.md](docs/publishing.md) for policy, adapters,
+claims, retry/reconciliation semantics, and manual live-test steps.
 
 For governed real-provider execution, configure Gemini and/or OpenRouter as documented, declare the
 current model cost class, set `APP_AI_MODE=real`, and restart the same command. The UI contains no
@@ -233,6 +257,9 @@ The automated suite covers:
 - Flask application startup, dashboard, forms, evidence review, workspace, safe approval, controlled
   human revision, provider/settings views, CSRF, escaping, safe errors, and SQLite restart behavior
 - distinct Blog, X single/thread, Instagram carousel/reel/image-plan, and Facebook presenters
+- approved-only publication, dry runs, schedules, cancellation, claims, leases, and SQLite restarts
+- X thread continuation, Facebook and Instagram payloads, Blog export, retries, and reconciliation
+- French publication preview, confirmation, receipts, Instagram media readiness, and credential safety
 
 Tests use only local fakes and in-memory HTTP transports; they require no API credentials, network
 access, provider quota, or paid services.
@@ -240,10 +267,9 @@ access, provider quota, or paid services.
 ## Deliberately out of scope for this phase
 
 - Automated web research/crawling
-- Social network and blog publishing
 - Image or video generation for Instagram concepts
-- Scheduling, analytics, experiments, and learning loops
-- Public API, background worker runtime, enterprise authentication, and multi-user collaboration
+- Analytics, experiments, and learning loops
+- CMS-specific Blog publishing, remote deletion, enterprise authentication, and multi-user collaboration
 - PostgreSQL adapter and production schema migrations
 
 These are staged work, not advertised product capabilities.

@@ -6,6 +6,7 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
@@ -23,6 +24,16 @@ from lorchestrateur.domain.platform_content import (
     PlatformContentRecord,
     PlatformValidationStatus,
     QualityBreakdown,
+)
+from lorchestrateur.domain.publication import (
+    MediaAsset,
+    MediaAssetType,
+    PublicationAttempt,
+    PublicationAttemptOutcome,
+    PublicationMode,
+    PublicationReceipt,
+    PublicationRequest,
+    PublicationStatus,
 )
 from lorchestrateur.domain.validation import ValidationIssue
 from lorchestrateur.domain.workflow import ContentJob, ContentJobState, JobStep
@@ -178,6 +189,69 @@ class SQLiteContentJobRepository:
                     UNIQUE(job_id, master_content_id, platform, generation_attempt_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS publication_requests (
+                    id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL REFERENCES content_jobs(id) ON DELETE CASCADE,
+                    platform_content_id TEXT NOT NULL
+                        REFERENCES platform_contents(id) ON DELETE CASCADE,
+                    platform TEXT NOT NULL,
+                    requested_by TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    scheduled_at TEXT,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL,
+                    dry_run INTEGER NOT NULL,
+                    claim_owner TEXT,
+                    claimed_at TEXT,
+                    lease_expires_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS publication_attempts (
+                    id TEXT PRIMARY KEY,
+                    publication_id TEXT NOT NULL
+                        REFERENCES publication_requests(id) ON DELETE CASCADE,
+                    attempt_number INTEGER NOT NULL,
+                    adapter_name TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    error_classification TEXT,
+                    remote_identifier TEXT,
+                    UNIQUE(publication_id, attempt_number)
+                );
+
+                CREATE TABLE IF NOT EXISTS publication_receipts (
+                    id TEXT PRIMARY KEY,
+                    publication_id TEXT NOT NULL
+                        REFERENCES publication_requests(id) ON DELETE CASCADE,
+                    platform TEXT NOT NULL,
+                    item_index INTEGER NOT NULL,
+                    remote_id TEXT NOT NULL,
+                    remote_url TEXT,
+                    published_at TEXT NOT NULL,
+                    adapter_name TEXT NOT NULL,
+                    adapter_version TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    delivery_kind TEXT NOT NULL,
+                    receipt_metadata TEXT NOT NULL,
+                    UNIQUE(publication_id, item_index)
+                );
+
+                CREATE TABLE IF NOT EXISTS media_assets (
+                    id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL REFERENCES content_jobs(id) ON DELETE CASCADE,
+                    platform_content_id TEXT NOT NULL
+                        REFERENCES platform_contents(id) ON DELETE CASCADE,
+                    media_type TEXT NOT NULL,
+                    source_url TEXT NOT NULL,
+                    media_order INTEGER NOT NULL,
+                    alt_text TEXT,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(platform_content_id, media_order)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_job_steps_job_id
                     ON job_steps(job_id, sequence);
 
@@ -187,7 +261,13 @@ class SQLiteContentJobRepository:
                 CREATE INDEX IF NOT EXISTS idx_platform_contents_job_platform
                     ON platform_contents(job_id, platform, revision);
 
-                PRAGMA user_version = 3;
+                CREATE INDEX IF NOT EXISTS idx_publications_due
+                    ON publication_requests(status, scheduled_at, lease_expires_at);
+
+                CREATE INDEX IF NOT EXISTS idx_publications_job
+                    ON publication_requests(job_id, platform, created_at);
+
+                PRAGMA user_version = 4;
                 """
             )
 
@@ -268,9 +348,7 @@ class SQLiteContentJobRepository:
 
     def get_source(self, source_id: str) -> SourceEvidence:
         with self._connect() as connection:
-            row = connection.execute(
-                "SELECT * FROM sources WHERE id = ?", (source_id,)
-            ).fetchone()
+            row = connection.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()
         if row is None:
             raise ArtifactNotFoundError(f"source not found: {source_id}")
         return self._row_to_source(row)
@@ -335,9 +413,7 @@ class SQLiteContentJobRepository:
                 "SELECT * FROM content_strategies WHERE job_id = ?", (job_id,)
             ).fetchone()
         if row is None:
-            raise ArtifactNotFoundError(
-                f"content strategy not found for job: {job_id}"
-            )
+            raise ArtifactNotFoundError(f"content strategy not found for job: {job_id}")
         return self._row_to_strategy(row)
 
     def save_master_content_with_checkpoint(
@@ -363,9 +439,7 @@ class SQLiteContentJobRepository:
                         master_content.body,
                         json.dumps(master_content.key_points),
                         json.dumps(master_content.source_ids),
-                        self._generation_metadata_to_json(
-                            master_content.generation_metadata
-                        ),
+                        self._generation_metadata_to_json(master_content.generation_metadata),
                         master_content.created_at.isoformat(),
                         master_content.updated_at.isoformat(),
                     ),
@@ -382,9 +456,7 @@ class SQLiteContentJobRepository:
                 "SELECT * FROM master_contents WHERE job_id = ?", (job_id,)
             ).fetchone()
         if row is None:
-            raise ArtifactNotFoundError(
-                f"master content not found for job: {job_id}"
-            )
+            raise ArtifactNotFoundError(f"master content not found for job: {job_id}")
         return self._row_to_master_content(row)
 
     def save_platform_content_with_checkpoint(
@@ -504,10 +576,357 @@ class SQLiteContentJobRepository:
                     )
             self._insert_step(connection, step)
 
+    def add_publication(self, publication: PublicationRequest) -> PublicationRequest:
+        existing = self.get_publication_by_idempotency_key(publication.idempotency_key)
+        if existing is not None:
+            return existing
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO publication_requests (
+                        id, job_id, platform_content_id, platform, requested_by, mode,
+                        scheduled_at, idempotency_key, status, dry_run, claim_owner,
+                        claimed_at, lease_expires_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    self._publication_values(publication),
+                )
+        except sqlite3.IntegrityError as exc:
+            duplicate = self.get_publication_by_idempotency_key(publication.idempotency_key)
+            if duplicate is not None:
+                return duplicate
+            raise DuplicateArtifactError(f"publication already exists: {publication.id}") from exc
+        return publication
+
+    def get_publication(self, publication_id: str) -> PublicationRequest:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM publication_requests WHERE id = ?", (publication_id,)
+            ).fetchone()
+        if row is None:
+            raise ArtifactNotFoundError(f"publication not found: {publication_id}")
+        return self._row_to_publication(row)
+
+    def get_publication_by_idempotency_key(self, idempotency_key: str) -> PublicationRequest | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM publication_requests WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+        return None if row is None else self._row_to_publication(row)
+
+    def list_publications(self, job_id: str | None = None) -> tuple[PublicationRequest, ...]:
+        with self._connect() as connection:
+            if job_id is None:
+                rows = connection.execute(
+                    "SELECT * FROM publication_requests ORDER BY created_at, id"
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM publication_requests
+                    WHERE job_id = ? ORDER BY created_at, id
+                    """,
+                    (job_id,),
+                ).fetchall()
+        return tuple(self._row_to_publication(row) for row in rows)
+
+    def save_publication(self, publication: PublicationRequest) -> None:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE publication_requests SET
+                    job_id = ?, platform_content_id = ?, platform = ?, requested_by = ?,
+                    mode = ?, scheduled_at = ?, idempotency_key = ?, status = ?,
+                    dry_run = ?, claim_owner = ?, claimed_at = ?, lease_expires_at = ?,
+                    created_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (*self._publication_values(publication)[1:], publication.id),
+            )
+            if cursor.rowcount != 1:
+                raise ArtifactNotFoundError(f"publication not found: {publication.id}")
+
+    def add_publication_attempt(self, attempt: PublicationAttempt) -> None:
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO publication_attempts (
+                        id, publication_id, attempt_number, adapter_name, started_at,
+                        finished_at, outcome, error_classification, remote_identifier
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        attempt.id,
+                        attempt.publication_id,
+                        attempt.attempt_number,
+                        attempt.adapter_name,
+                        attempt.started_at.isoformat(),
+                        attempt.finished_at.isoformat(),
+                        attempt.outcome.value,
+                        attempt.error_classification,
+                        attempt.remote_identifier,
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateArtifactError("publication attempt already exists") from exc
+
+    def list_publication_attempts(self, publication_id: str) -> tuple[PublicationAttempt, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM publication_attempts
+                WHERE publication_id = ? ORDER BY attempt_number
+                """,
+                (publication_id,),
+            ).fetchall()
+        return tuple(self._row_to_publication_attempt(row) for row in rows)
+
+    def add_publication_receipt(self, receipt: PublicationReceipt) -> None:
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO publication_receipts (
+                        id, publication_id, platform, item_index, remote_id, remote_url,
+                        published_at, adapter_name, adapter_version, status,
+                        delivery_kind, receipt_metadata
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        receipt.id,
+                        receipt.publication_id,
+                        receipt.platform,
+                        receipt.item_index,
+                        receipt.remote_id,
+                        receipt.remote_url,
+                        receipt.published_at.isoformat(),
+                        receipt.adapter_name,
+                        receipt.adapter_version,
+                        receipt.status,
+                        receipt.delivery_kind,
+                        json.dumps(dict(receipt.metadata), sort_keys=True),
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateArtifactError("publication receipt already exists") from exc
+
+    def list_publication_receipts(self, publication_id: str) -> tuple[PublicationReceipt, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM publication_receipts
+                WHERE publication_id = ? ORDER BY item_index
+                """,
+                (publication_id,),
+            ).fetchall()
+        return tuple(self._row_to_publication_receipt(row) for row in rows)
+
+    def add_media_asset(self, asset: MediaAsset) -> None:
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO media_assets (
+                        id, job_id, platform_content_id, media_type, source_url,
+                        media_order, alt_text, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        asset.id,
+                        asset.job_id,
+                        asset.platform_content_id,
+                        asset.media_type.value,
+                        asset.source_url,
+                        asset.order,
+                        asset.alt_text,
+                        asset.created_at.isoformat(),
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateArtifactError("media asset already exists") from exc
+
+    def list_media_assets(self, platform_content_id: str) -> tuple[MediaAsset, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM media_assets
+                WHERE platform_content_id = ? ORDER BY media_order, id
+                """,
+                (platform_content_id,),
+            ).fetchall()
+        return tuple(self._row_to_media_asset(row) for row in rows)
+
+    def claim_due_publications(
+        self,
+        *,
+        owner: str,
+        now: datetime,
+        lease_expires_at: datetime,
+        limit: int,
+    ) -> tuple[PublicationRequest, ...]:
+        if limit < 1:
+            return ()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                """
+                SELECT * FROM publication_requests
+                WHERE status IN (?, ?)
+                  AND (status = ? OR scheduled_at <= ?)
+                  AND (claim_owner IS NULL OR lease_expires_at <= ?)
+                ORDER BY COALESCE(scheduled_at, created_at), id
+                LIMIT ?
+                """,
+                (
+                    PublicationStatus.READY.value,
+                    PublicationStatus.SCHEDULED.value,
+                    PublicationStatus.READY.value,
+                    now.isoformat(),
+                    now.isoformat(),
+                    limit,
+                ),
+            ).fetchall()
+            claimed: list[PublicationRequest] = []
+            for row in rows:
+                publication = self._row_to_publication(row)
+                status = (
+                    PublicationStatus.READY
+                    if publication.status is PublicationStatus.SCHEDULED
+                    else publication.status
+                )
+                cursor = connection.execute(
+                    """
+                    UPDATE publication_requests SET
+                        status = ?, claim_owner = ?, claimed_at = ?,
+                        lease_expires_at = ?, updated_at = ?
+                    WHERE id = ?
+                      AND (claim_owner IS NULL OR lease_expires_at <= ?)
+                    """,
+                    (
+                        status.value,
+                        owner,
+                        now.isoformat(),
+                        lease_expires_at.isoformat(),
+                        now.isoformat(),
+                        publication.id,
+                        now.isoformat(),
+                    ),
+                )
+                if cursor.rowcount == 1:
+                    claimed.append(
+                        PublicationRequest(
+                            id=publication.id,
+                            job_id=publication.job_id,
+                            platform_content_id=publication.platform_content_id,
+                            platform=publication.platform,
+                            requested_by=publication.requested_by,
+                            mode=publication.mode,
+                            scheduled_at=publication.scheduled_at,
+                            idempotency_key=publication.idempotency_key,
+                            status=status,
+                            dry_run=publication.dry_run,
+                            claim_owner=owner,
+                            claimed_at=now,
+                            lease_expires_at=lease_expires_at,
+                            created_at=publication.created_at,
+                            updated_at=now,
+                        )
+                    )
+            return tuple(claimed)
+
+    def claim_publication(
+        self,
+        publication_id: str,
+        *,
+        owner: str,
+        now: datetime,
+        lease_expires_at: datetime,
+    ) -> PublicationRequest | None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM publication_requests WHERE id = ?",
+                (publication_id,),
+            ).fetchone()
+            if row is None:
+                raise ArtifactNotFoundError(f"publication not found: {publication_id}")
+            publication = self._row_to_publication(row)
+            due = publication.status is PublicationStatus.READY or (
+                publication.status is PublicationStatus.SCHEDULED
+                and publication.scheduled_at is not None
+                and publication.scheduled_at <= now
+            )
+            claimable = publication.claim_owner is None or (
+                publication.lease_expires_at is not None and publication.lease_expires_at <= now
+            )
+            if not due or not claimable:
+                return None
+            cursor = connection.execute(
+                """
+                UPDATE publication_requests SET status = ?, claim_owner = ?,
+                    claimed_at = ?, lease_expires_at = ?, updated_at = ?
+                WHERE id = ? AND (claim_owner IS NULL OR lease_expires_at <= ?)
+                """,
+                (
+                    PublicationStatus.READY.value,
+                    owner,
+                    now.isoformat(),
+                    lease_expires_at.isoformat(),
+                    now.isoformat(),
+                    publication_id,
+                    now.isoformat(),
+                ),
+            )
+            if cursor.rowcount != 1:
+                return None
+        return self.get_publication(publication_id)
+
+    def recover_expired_publications(self, *, now: datetime) -> tuple[PublicationRequest, ...]:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                """
+                SELECT * FROM publication_requests
+                WHERE status = ? AND lease_expires_at IS NOT NULL
+                    AND lease_expires_at <= ?
+                ORDER BY lease_expires_at, id
+                """,
+                (PublicationStatus.PUBLISHING.value, now.isoformat()),
+            ).fetchall()
+            recovered = []
+            for row in rows:
+                cursor = connection.execute(
+                    """
+                    UPDATE publication_requests SET status = ?, claim_owner = NULL,
+                        claimed_at = NULL, lease_expires_at = NULL, updated_at = ?
+                    WHERE id = ? AND status = ? AND lease_expires_at <= ?
+                    """,
+                    (
+                        PublicationStatus.NEEDS_RECONCILIATION.value,
+                        now.isoformat(),
+                        row["id"],
+                        PublicationStatus.PUBLISHING.value,
+                        now.isoformat(),
+                    ),
+                )
+                if cursor.rowcount == 1:
+                    recovered.append(
+                        replace(
+                            self._row_to_publication(row),
+                            status=PublicationStatus.NEEDS_RECONCILIATION,
+                            claim_owner=None,
+                            claimed_at=None,
+                            lease_expires_at=None,
+                            updated_at=now,
+                        )
+                    )
+            return tuple(recovered)
+
     @staticmethod
-    def _update_job(
-        connection: sqlite3.Connection, job: ContentJob, step: JobStep
-    ) -> None:
+    def _update_job(connection: sqlite3.Connection, job: ContentJob, step: JobStep) -> None:
         if step.job_id != job.id or step.sequence != job.version:
             raise ValueError("job step does not match the content job checkpoint")
         expected_version = job.version - 1
@@ -573,9 +992,7 @@ class SQLiteContentJobRepository:
                 "generated_at": metadata.generated_at.isoformat(),
                 "duration_ms": metadata.duration_ms,
                 "requested_at": (
-                    metadata.requested_at.isoformat()
-                    if metadata.requested_at is not None
-                    else None
+                    metadata.requested_at.isoformat() if metadata.requested_at is not None else None
                 ),
                 "provider_latency_ms": metadata.provider_latency_ms,
                 "retry_count": metadata.retry_count,
@@ -589,9 +1006,7 @@ class SQLiteContentJobRepository:
         )
 
     @classmethod
-    def _platform_content_values(
-        cls, content: PlatformContentRecord
-    ) -> tuple[object, ...]:
+    def _platform_content_values(cls, content: PlatformContentRecord) -> tuple[object, ...]:
         return (
             content.id,
             content.job_id,
@@ -609,6 +1024,26 @@ class SQLiteContentJobRepository:
             content.revision,
             content.created_at.isoformat(),
             content.updated_at.isoformat(),
+        )
+
+    @staticmethod
+    def _publication_values(publication: PublicationRequest) -> tuple[object, ...]:
+        return (
+            publication.id,
+            publication.job_id,
+            publication.platform_content_id,
+            publication.platform,
+            publication.requested_by,
+            publication.mode.value,
+            publication.scheduled_at.isoformat() if publication.scheduled_at else None,
+            publication.idempotency_key,
+            publication.status.value,
+            int(publication.dry_run),
+            publication.claim_owner,
+            publication.claimed_at.isoformat() if publication.claimed_at else None,
+            (publication.lease_expires_at.isoformat() if publication.lease_expires_at else None),
+            publication.created_at.isoformat(),
+            publication.updated_at.isoformat(),
         )
 
     @staticmethod
@@ -691,9 +1126,7 @@ class SQLiteContentJobRepository:
     @classmethod
     def _row_to_strategy(cls, row: sqlite3.Row) -> ContentStrategy:
         key_messages = tuple(
-            StrategyKeyMessage(
-                message=item["message"], source_ids=tuple(item["source_ids"])
-            )
+            StrategyKeyMessage(message=item["message"], source_ids=tuple(item["source_ids"]))
             for item in json.loads(row["key_messages"])
         )
         return ContentStrategy(
@@ -707,9 +1140,7 @@ class SQLiteContentJobRepository:
             intended_outcome=row["intended_outcome"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
-            generation_metadata=cls._generation_metadata_from_json(
-                row["generation_metadata"]
-            ),
+            generation_metadata=cls._generation_metadata_from_json(row["generation_metadata"]),
         )
 
     @classmethod
@@ -724,9 +1155,7 @@ class SQLiteContentJobRepository:
             source_ids=tuple(json.loads(row["source_ids"])),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
-            generation_metadata=cls._generation_metadata_from_json(
-                row["generation_metadata"]
-            ),
+            generation_metadata=cls._generation_metadata_from_json(row["generation_metadata"]),
         )
 
     def _row_to_platform_content(self, row: sqlite3.Row) -> PlatformContentRecord:
@@ -734,9 +1163,7 @@ class SQLiteContentJobRepository:
         if metadata is None:
             raise ValueError("platform content generation metadata is missing")
         raw_breakdown = (
-            json.loads(row["quality_breakdown"])
-            if row["quality_breakdown"] is not None
-            else None
+            json.loads(row["quality_breakdown"]) if row["quality_breakdown"] is not None else None
         )
         breakdown = (
             QualityBreakdown(
@@ -775,6 +1202,74 @@ class SQLiteContentJobRepository:
             revision=row["revision"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _row_to_publication(row: sqlite3.Row) -> PublicationRequest:
+        return PublicationRequest(
+            id=row["id"],
+            job_id=row["job_id"],
+            platform_content_id=row["platform_content_id"],
+            platform=row["platform"],
+            requested_by=row["requested_by"],
+            mode=PublicationMode(row["mode"]),
+            scheduled_at=(
+                datetime.fromisoformat(row["scheduled_at"]) if row["scheduled_at"] else None
+            ),
+            idempotency_key=row["idempotency_key"],
+            status=PublicationStatus(row["status"]),
+            dry_run=bool(row["dry_run"]),
+            claim_owner=row["claim_owner"],
+            claimed_at=(datetime.fromisoformat(row["claimed_at"]) if row["claimed_at"] else None),
+            lease_expires_at=(
+                datetime.fromisoformat(row["lease_expires_at"]) if row["lease_expires_at"] else None
+            ),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _row_to_publication_attempt(row: sqlite3.Row) -> PublicationAttempt:
+        return PublicationAttempt(
+            id=row["id"],
+            publication_id=row["publication_id"],
+            attempt_number=row["attempt_number"],
+            adapter_name=row["adapter_name"],
+            started_at=datetime.fromisoformat(row["started_at"]),
+            finished_at=datetime.fromisoformat(row["finished_at"]),
+            outcome=PublicationAttemptOutcome(row["outcome"]),
+            error_classification=row["error_classification"],
+            remote_identifier=row["remote_identifier"],
+        )
+
+    @staticmethod
+    def _row_to_publication_receipt(row: sqlite3.Row) -> PublicationReceipt:
+        return PublicationReceipt(
+            id=row["id"],
+            publication_id=row["publication_id"],
+            platform=row["platform"],
+            item_index=row["item_index"],
+            remote_id=row["remote_id"],
+            remote_url=row["remote_url"],
+            published_at=datetime.fromisoformat(row["published_at"]),
+            adapter_name=row["adapter_name"],
+            adapter_version=row["adapter_version"],
+            status=row["status"],
+            delivery_kind=row["delivery_kind"],
+            metadata=MappingProxyType(json.loads(row["receipt_metadata"])),
+        )
+
+    @staticmethod
+    def _row_to_media_asset(row: sqlite3.Row) -> MediaAsset:
+        return MediaAsset(
+            id=row["id"],
+            job_id=row["job_id"],
+            platform_content_id=row["platform_content_id"],
+            media_type=MediaAssetType(row["media_type"]),
+            source_url=row["source_url"],
+            order=row["media_order"],
+            alt_text=row["alt_text"],
+            created_at=datetime.fromisoformat(row["created_at"]),
         )
 
     @staticmethod

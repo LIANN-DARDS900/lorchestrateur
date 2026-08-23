@@ -7,6 +7,7 @@
   <div class="workspace-title-row"><div><span class="status status-{{ workspace.job.status_tone }}">{{ workspace.job.status }}</span><h1>{{ workspace.job.idea }}</h1><p>Créé le {{ workspace.job.created_at }} · {{ workspace.job.platforms|join(' · ') }}</p></div>
     {% if workspace.job.state == 'awaiting_approval' %}<form method="post" action="{{ url_for('web.approve_job', job_id=workspace.job.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="button button-primary" type="submit">Approuver le contenu</button></form>{% elif workspace.job.state == 'approved' %}<div class="approved-seal"><span aria-hidden="true">✓</span><div><strong>Contenu approuvé</strong><small>Stocké, jamais publié automatiquement</small></div></div>{% endif %}
   </div>
+  {% if workspace.job.state in ['approved', 'publishing', 'published'] %}<a class="button button-primary publication-entry" href="{{ url_for('web.publication_workspace', job_id=workspace.job.id) }}">Prévisualiser la publication</a>{% endif %}
 </div>
 <nav class="workspace-nav" aria-label="Sections du workflow"><a href="#overview">Vue d’ensemble</a><a href="#sources">Sources</a><a href="#strategy">Stratégie</a><a href="#master">Contenu maître</a>{% for platform in workspace.job.platform_keys %}<a href="#platform-{{ platform }}">{{ platform|capitalize }}</a>{% endfor %}<a href="#quality">Qualité</a><a href="#history">Historique</a></nav>
 

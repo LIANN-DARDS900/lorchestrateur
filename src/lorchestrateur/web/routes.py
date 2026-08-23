@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 
 from lorchestrateur.domain.content import EvidenceStatus, SourceType
+from lorchestrateur.domain.publication import MediaAssetType, PublicationMode
 from lorchestrateur.domain.workflow import ContentJobState, StateTransitionError
 from lorchestrateur.persistence.contracts import ContentIntelligenceRepository
+from lorchestrateur.publishing.contracts import PublicationError
 from lorchestrateur.web.presenters import (
     PLATFORM_LABELS,
     dashboard_view,
     present_job,
+    publication_view,
     workspace_view,
 )
 
@@ -32,6 +37,10 @@ def _service():
 
 def _executor():
     return current_app.extensions["lorchestrateur_components"].executor
+
+
+def _publication_service():
+    return current_app.extensions["lorchestrateur_components"].publication_service
 
 
 @bp.get("/")
@@ -96,6 +105,121 @@ def job_workspace(job_id: str):
         minimum_quality_score=current_app.config["QUALITY_THRESHOLD"],
     )
     return render_template("workspace.html", workspace=model)
+
+
+@bp.get("/jobs/<job_id>/publication")
+def publication_workspace(job_id: str):
+    job = _repository().get(job_id)
+    if job.state not in {
+        ContentJobState.APPROVED,
+        ContentJobState.PUBLISHING,
+        ContentJobState.PUBLISHED,
+    }:
+        return _action_error("La publication n’est disponible qu’après l’approbation humaine.")
+    model = publication_view(
+        _repository(),
+        _publication_service(),
+        job,
+        minimum_quality_score=current_app.config["QUALITY_THRESHOLD"],
+    )
+    settings = current_app.extensions["lorchestrateur_settings"]
+    return render_template(
+        "publication.html",
+        publication=model,
+        app_timezone=settings.app_timezone,
+    )
+
+
+@bp.post("/jobs/<job_id>/publication/media")
+def attach_publication_media(job_id: str):
+    try:
+        media_type = MediaAssetType(request.form.get("media_type", ""))
+        order = int(request.form.get("order", ""))
+    except (ValueError, TypeError):
+        return _action_error("Le type ou l’ordre du média n’est pas valide.", 422)
+    try:
+        _publication_service().attach_media(
+            job_id,
+            platform_content_id=request.form.get("platform_content_id", ""),
+            media_type=media_type,
+            source_url=request.form.get("source_url", "").strip(),
+            order=order,
+            alt_text=request.form.get("alt_text", "").strip() or None,
+        )
+    except (PublicationError, ValueError) as exc:
+        return _action_error(_publication_message(exc), 422)
+    flash("Média Instagram attaché au contenu approuvé.", "success")
+    return redirect(url_for("web.publication_workspace", job_id=job_id))
+
+
+@bp.post("/jobs/<job_id>/publication/publish-now")
+def publish_now(job_id: str):
+    if request.form.get("confirmed") != "yes":
+        return _action_error("Confirmez explicitement cette action de publication.", 422)
+    try:
+        publications = _publication_service().create_publications(
+            job_id,
+            requested_by=LOCAL_REVIEWER,
+            mode=PublicationMode.PUBLISH_NOW,
+        )
+        for publication in publications:
+            _publication_service().claim_and_execute(publication.id, owner="web:publish-now")
+    except PublicationError as exc:
+        return _action_error(_publication_message(exc), 409)
+    if _publication_service().policy.dry_run:
+        flash("Simulation terminée. Aucun contenu externe n’a été publié.", "success")
+    elif _publication_service().policy.demo_mode:
+        flash("Livraison de démonstration terminée, sans plateforme externe.", "success")
+    else:
+        flash("Ordre de publication exécuté. Consultez les reçus de livraison.", "success")
+    return redirect(url_for("web.publication_workspace", job_id=job_id))
+
+
+@bp.post("/jobs/<job_id>/publication/schedule")
+def schedule_publication(job_id: str):
+    raw_time = request.form.get("scheduled_at", "").strip()
+    timezone_name = request.form.get("timezone", "").strip()
+    settings = current_app.extensions["lorchestrateur_settings"]
+    if timezone_name not in {settings.app_timezone, "UTC"}:
+        return _action_error("Le fuseau horaire sélectionné n’est pas autorisé.", 422)
+    try:
+        scheduled_at = _resolve_local_time(raw_time, timezone_name)
+        _publication_service().create_publications(
+            job_id,
+            requested_by=LOCAL_REVIEWER,
+            mode=PublicationMode.SCHEDULED,
+            scheduled_at=scheduled_at,
+        )
+    except (PublicationError, ValueError):
+        return _action_error("Choisissez une date future valide avec un fuseau explicite.", 422)
+    flash("La programmation durable a été enregistrée.", "success")
+    return redirect(url_for("web.publication_workspace", job_id=job_id))
+
+
+@bp.post("/jobs/<job_id>/publication/<publication_id>/cancel")
+def cancel_publication(job_id: str, publication_id: str):
+    publication = _repository().get_publication(publication_id)
+    if publication.job_id != job_id:
+        return _action_error("Cette programmation n’appartient pas à ce workflow.", 404)
+    try:
+        _publication_service().cancel(publication_id, cancelled_by=LOCAL_REVIEWER)
+    except PublicationError as exc:
+        return _action_error(_publication_message(exc))
+    flash("Programmation annulée. Aucun contenu distant n’a été supprimé.", "success")
+    return redirect(url_for("web.publication_workspace", job_id=job_id))
+
+
+@bp.post("/jobs/<job_id>/publication/<publication_id>/reconcile")
+def reconcile_publication(job_id: str, publication_id: str):
+    publication = _repository().get_publication(publication_id)
+    if publication.job_id != job_id:
+        return _action_error("Cette publication n’appartient pas à ce workflow.", 404)
+    try:
+        _publication_service().reconcile(publication_id)
+    except PublicationError as exc:
+        return _action_error(_publication_message(exc))
+    flash("Réconciliation exécutée sans nouvelle publication aveugle.", "success")
+    return redirect(url_for("web.publication_workspace", job_id=job_id))
 
 
 @bp.post("/jobs/<job_id>/sources")
@@ -211,6 +335,16 @@ def providers():
             "enabled": settings.openrouter_enabled,
         },
     ]
+    publishing_registry = current_app.extensions["lorchestrateur_components"].publishing_registry
+    publishing_providers = [
+        {
+            "name": item.key.title() if item.key != "x" else "X",
+            "configured": item.configured,
+            "destination": item.destination_label,
+            "adapter": item.adapter_name,
+        }
+        for item in publishing_registry.all()
+    ]
     return render_template(
         "providers.html",
         providers=providers_view,
@@ -219,6 +353,10 @@ def providers():
         if settings.app_ai_mode == "demo"
         else settings.ai_provider_order,
         demo_mode=settings.app_ai_mode == "demo",
+        publishing_providers=publishing_providers,
+        publishing_enabled=settings.publishing_enabled,
+        publishing_dry_run=settings.publishing_dry_run,
+        publishing_demo_mode=settings.publishing_adapter_mode == "demo",
     )
 
 
@@ -230,6 +368,15 @@ def settings_page():
         quality_threshold=settings.platform_min_quality_score,
         app_ai_mode=settings.app_ai_mode,
         database_kind="SQLite local",
+        publishing_mode=(
+            "Démonstration" if settings.publishing_adapter_mode == "demo" else "Adaptateurs réels"
+        ),
+        publishing_policy=(
+            "Simulation"
+            if settings.publishing_dry_run
+            else ("Activée" if settings.publishing_enabled else "Désactivée")
+        ),
+        app_timezone=settings.app_timezone,
     )
 
 
@@ -241,3 +388,32 @@ def _action_error(message: str, status: int = 409):
 def _valid_http_url(value: str) -> bool:
     parsed = urlparse(value)
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _resolve_local_time(raw_value: str, timezone_name: str) -> datetime:
+    """Reject ambiguous/nonexistent wall times instead of choosing a DST fold silently."""
+
+    local_time = datetime.fromisoformat(raw_value)
+    if local_time.tzinfo is not None:
+        raise ValueError("schedule input must be a local wall time")
+    timezone = ZoneInfo(timezone_name)
+    first = local_time.replace(tzinfo=timezone, fold=0)
+    second = local_time.replace(tzinfo=timezone, fold=1)
+    if first.utcoffset() != second.utcoffset():
+        raise ValueError("ambiguous or nonexistent local time")
+    if first.astimezone(UTC).astimezone(timezone).replace(tzinfo=None) != local_time:
+        raise ValueError("nonexistent local time")
+    return first
+
+
+def _publication_message(error: Exception) -> str:
+    classification = getattr(error, "classification", "validation")
+    messages = {
+        "validation": "La publication est bloquée par un contrôle de préparation.",
+        "unavailable": "La publication est désactivée ou non configurée.",
+        "authentication": "L’authentification de publication a été refusée.",
+        "permission": "Le compte configuré ne possède pas la permission requise.",
+        "rate_limit": "La limite de la plateforme a été atteinte.",
+        "ambiguous_outcome": "Le résultat distant est incertain : réconciliation requise.",
+    }
+    return messages.get(classification, "La publication n’a pas pu être exécutée.")

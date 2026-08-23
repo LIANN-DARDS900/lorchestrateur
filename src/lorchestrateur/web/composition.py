@@ -14,6 +14,9 @@ from lorchestrateur.domain.workflow import StateMachine
 from lorchestrateur.persistence.contracts import ContentIntelligenceRepository
 from lorchestrateur.persistence.sqlite import SQLiteContentJobRepository
 from lorchestrateur.platforms.builtins import create_default_registry
+from lorchestrateur.publishing.factory import create_publishing_registry
+from lorchestrateur.publishing.registry import PublishingRegistry
+from lorchestrateur.publishing.service import PublicationPolicy, PublicationService
 from lorchestrateur.web.demo import create_demo_provider
 
 
@@ -22,6 +25,8 @@ class WebComponents:
     repository: ContentIntelligenceRepository
     service: OrchestrationService
     executor: ContentWorkflowExecutor
+    publishing_registry: PublishingRegistry
+    publication_service: PublicationService
 
 
 def compose_web_components(
@@ -49,8 +54,24 @@ def compose_web_components(
         ai_router=router,
         quality_policy=QualityPolicy(settings.platform_min_quality_score),
     )
+    publishing_registry = create_publishing_registry(settings)
+    publication_service = PublicationService(
+        selected_repository,
+        publishing_registry,
+        StateMachine(),
+        PublicationPolicy(
+            external_delivery_enabled=settings.publishing_enabled,
+            dry_run=settings.publishing_dry_run,
+            demo_mode=settings.publishing_adapter_mode == "demo",
+            minimum_quality_score=settings.platform_min_quality_score,
+            max_retries=settings.publishing_max_retries,
+            lease_seconds=settings.publishing_lease_seconds,
+        ),
+    )
     return WebComponents(
         repository=selected_repository,
         service=service,
         executor=ContentWorkflowExecutor(service, selected_repository),
+        publishing_registry=publishing_registry,
+        publication_service=publication_service,
     )

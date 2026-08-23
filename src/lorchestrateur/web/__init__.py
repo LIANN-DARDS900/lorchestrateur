@@ -10,7 +10,11 @@ from flask import Flask, render_template
 from werkzeug.exceptions import HTTPException
 
 from lorchestrateur.config import ConfigurationError, Settings
-from lorchestrateur.persistence.contracts import ContentIntelligenceRepository, JobNotFoundError
+from lorchestrateur.persistence.contracts import (
+    ArtifactNotFoundError,
+    ContentIntelligenceRepository,
+    JobNotFoundError,
+)
 from lorchestrateur.web.composition import compose_web_components
 from lorchestrateur.web.routes import bp
 from lorchestrateur.web.security import csrf_token, enforce_csrf
@@ -23,10 +27,7 @@ def create_app(
     test_config: dict[str, Any] | None = None,
 ) -> Flask:
     selected_settings = settings or Settings.from_env()
-    if (
-        selected_settings.app_env.lower() == "production"
-        and not selected_settings.web_secret_key
-    ):
+    if selected_settings.app_env.lower() == "production" and not selected_settings.web_secret_key:
         raise ConfigurationError("WEB_SECRET_KEY is required when APP_ENV=production")
     app = Flask(__name__)
     app.config.from_mapping(
@@ -54,12 +55,15 @@ def create_app(
     app.context_processor(
         lambda: {
             "demo_mode": selected_settings.app_ai_mode == "demo",
+            "publishing_demo_mode": (selected_settings.publishing_adapter_mode == "demo"),
+            "publishing_dry_run": selected_settings.publishing_dry_run,
             "app_env": selected_settings.app_env,
         }
     )
     app.register_blueprint(bp)
 
     @app.errorhandler(JobNotFoundError)
+    @app.errorhandler(ArtifactNotFoundError)
     def missing_job(_error):
         return render_template("errors/404.html"), 404
 

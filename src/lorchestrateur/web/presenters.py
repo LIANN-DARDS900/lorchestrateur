@@ -21,6 +21,7 @@ from lorchestrateur.platforms.instagram import (
     InstagramReelV1,
 )
 from lorchestrateur.platforms.x import XContentV1
+from lorchestrateur.publishing.service import PublicationService
 
 STATUS_LABELS = {
     ContentJobState.CREATED: "Préparation",
@@ -33,7 +34,7 @@ STATUS_LABELS = {
     ContentJobState.APPROVED: "Approuvé",
     ContentJobState.PAUSED: "En pause",
     ContentJobState.FAILED: "Échec",
-    ContentJobState.PUBLISHING: "Publication non disponible",
+    ContentJobState.PUBLISHING: "Publication en cours",
     ContentJobState.PUBLISHED: "Publié",
 }
 
@@ -104,6 +105,10 @@ def dashboard_view(repository: ContentIntelligenceRepository) -> dict[str, Any]:
         ContentJobState.ADAPTING_PLATFORMS,
         ContentJobState.VALIDATING,
     }
+    publications = (
+        repository.list_publications() if hasattr(repository, "list_publications") else ()
+    )
+    publication_counts = Counter(item.status.value for item in publications)
     return {
         "total": len(jobs),
         "processing": sum(counts[state] for state in processing_states),
@@ -111,6 +116,99 @@ def dashboard_view(repository: ContentIntelligenceRepository) -> dict[str, Any]:
         "approved": counts[ContentJobState.APPROVED],
         "attention": counts[ContentJobState.PAUSED] + counts[ContentJobState.FAILED],
         "recent": [present_job(job) for job in jobs[:6]],
+        "publication": {
+            "scheduled": publication_counts["scheduled"],
+            "publishing": publication_counts["publishing"],
+            "published": publication_counts["published"],
+            "failed": publication_counts["failed"],
+            "reconciliation": publication_counts["needs_reconciliation"],
+        },
+    }
+
+
+PUBLICATION_STATUS_LABELS = {
+    "draft": "Brouillon",
+    "scheduled": "Programmée",
+    "ready": "Prête",
+    "publishing": "Publication en cours",
+    "dry_run_completed": "Simulation terminée",
+    "published": "Publiée",
+    "failed": "Échec",
+    "cancelled": "Annulée",
+    "needs_reconciliation": "À réconcilier",
+}
+
+
+def publication_view(
+    repository,
+    service: PublicationService,
+    job: ContentJob,
+    *,
+    minimum_quality_score: int,
+) -> dict[str, Any]:
+    previews = service.preview_job(job.id)
+    publications = repository.list_publications(job.id)
+    content_by_id = {item.id: item for item in repository.list_platform_contents(job.id)}
+    return {
+        "job": present_job(job),
+        "dry_run": service.policy.dry_run,
+        "demo_mode": service.policy.demo_mode,
+        "external_enabled": service.policy.external_delivery_enabled,
+        "all_ready": bool(previews) and all(item.ready for item in previews),
+        "previews": [
+            {
+                "platform": item.platform,
+                "label": PLATFORM_LABELS.get(item.platform, item.platform.title()),
+                "content_id": item.platform_content_id,
+                "revision": item.revision,
+                "ready": item.ready,
+                "destination": item.destination,
+                "quality_score": item.quality_score,
+                "warnings": item.warnings,
+                "media_required": item.media_required,
+                "media_attached": item.media_attached,
+                "media": (
+                    repository.list_media_assets(item.platform_content_id)
+                    if item.platform_content_id
+                    else ()
+                ),
+                "content": (
+                    present_platform_content(
+                        content_by_id[item.platform_content_id], minimum_quality_score
+                    )
+                    if item.platform_content_id in content_by_id
+                    else None
+                ),
+            }
+            for item in previews
+        ],
+        "publications": [
+            {
+                "id": item.id,
+                "platform": item.platform,
+                "label": PLATFORM_LABELS.get(item.platform, item.platform.title()),
+                "status": item.status.value,
+                "status_label": PUBLICATION_STATUS_LABELS[item.status.value],
+                "scheduled_at": (
+                    _format_datetime(item.scheduled_at) if item.scheduled_at else None
+                ),
+                "dry_run": item.dry_run,
+                "requested_by": item.requested_by,
+                "receipts": [
+                    {
+                        "remote_id": receipt.remote_id,
+                        "remote_url": receipt.remote_url,
+                        "published_at": _format_datetime(receipt.published_at),
+                        "status": _receipt_status_label(receipt.status),
+                        "kind": receipt.delivery_kind,
+                        "index": receipt.item_index,
+                    }
+                    for receipt in repository.list_publication_receipts(item.id)
+                ],
+                "attempt_count": len(repository.list_publication_attempts(item.id)),
+            }
+            for item in reversed(publications)
+        ],
     }
 
 
@@ -316,7 +414,7 @@ def _format_datetime(value: datetime) -> str:
 
 
 def _status_tone(state: ContentJobState) -> str:
-    if state is ContentJobState.APPROVED:
+    if state in {ContentJobState.APPROVED, ContentJobState.PUBLISHED}:
         return "success"
     if state is ContentJobState.AWAITING_APPROVAL:
         return "review"
@@ -337,7 +435,28 @@ def _event_label(event: str) -> str:
         "platform_quality_gate_passed": "Contrôle qualité réussi",
         "human_approval_recorded": "Approbation humaine enregistrée",
         "human_revision_requested": "Modifications demandées",
+        "publication_created": "Publication préparée",
+        "publication_scheduled": "Publication programmée",
+        "publication_cancelled": "Programmation annulée",
+        "publication_started": "Publication démarrée",
+        "publication_retry": "Nouvelle tentative de publication",
+        "publication_succeeded": "Livraison confirmée",
+        "publication_failed": "Échec de livraison",
+        "publication_needs_reconciliation": "Réconciliation requise",
+        "publication_job_completed": "Tous les canaux sont livrés",
+        "publication_media_attached": "Média de publication attaché",
+        "publication_dry_run_completed": "Simulation de publication terminée",
         "workflow_paused": "Workflow mis en pause",
         "workflow_failed": "Workflow en échec",
     }
     return labels.get(event, event.replace("_", " ").capitalize())
+
+
+def _receipt_status_label(status: str) -> str:
+    labels = {
+        "delivered_demo": "Livraison démo confirmée",
+        "published": "Publication confirmée",
+        "exported": "Export confirmé",
+        "reconciled": "Réconciliation confirmée",
+    }
+    return labels.get(status, status.replace("_", " ").capitalize())

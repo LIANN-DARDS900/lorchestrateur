@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import datetime
 from threading import RLock
 
 from lorchestrateur.domain.content import ContentStrategy, MasterContent, SourceEvidence
 from lorchestrateur.domain.platform_content import PlatformContentRecord
+from lorchestrateur.domain.publication import (
+    MediaAsset,
+    PublicationAttempt,
+    PublicationReceipt,
+    PublicationRequest,
+    PublicationStatus,
+)
 from lorchestrateur.domain.workflow import ContentJob, JobStep
 from lorchestrateur.persistence.contracts import (
     ArtifactNotFoundError,
@@ -24,6 +33,10 @@ class InMemoryContentJobRepository:
         self._strategies: dict[str, ContentStrategy] = {}
         self._master_contents: dict[str, MasterContent] = {}
         self._platform_contents: dict[str, PlatformContentRecord] = {}
+        self._publications: dict[str, PublicationRequest] = {}
+        self._publication_attempts: dict[str, list[PublicationAttempt]] = {}
+        self._publication_receipts: dict[str, list[PublicationReceipt]] = {}
+        self._media_assets: dict[str, MediaAsset] = {}
         self._lock = RLock()
 
     def add(self, job: ContentJob) -> None:
@@ -83,9 +96,7 @@ class InMemoryContentJobRepository:
     def list_sources(self, job_id: str) -> tuple[SourceEvidence, ...]:
         with self._lock:
             self.get(job_id)
-            return tuple(
-                source for source in self._sources.values() if source.job_id == job_id
-            )
+            return tuple(source for source in self._sources.values() if source.job_id == job_id)
 
     def save_strategy_with_checkpoint(
         self, strategy: ContentStrategy, job: ContentJob, step: JobStep
@@ -129,9 +140,7 @@ class InMemoryContentJobRepository:
             try:
                 return self._master_contents[job_id]
             except KeyError as exc:
-                raise ArtifactNotFoundError(
-                    f"master content not found for job: {job_id}"
-                ) from exc
+                raise ArtifactNotFoundError(f"master content not found for job: {job_id}") from exc
 
     def save_platform_content_with_checkpoint(
         self, content: PlatformContentRecord, job: ContentJob, step: JobStep
@@ -141,9 +150,7 @@ class InMemoryContentJobRepository:
             if content.job_id != job.id:
                 raise ValueError("platform content and checkpoint belong to different jobs")
             if content.id in self._platform_contents:
-                raise DuplicateArtifactError(
-                    f"platform content already exists: {content.id}"
-                )
+                raise DuplicateArtifactError(f"platform content already exists: {content.id}")
             for existing in self._platform_contents.values():
                 same_lineage = (
                     existing.job_id == content.job_id
@@ -154,10 +161,7 @@ class InMemoryContentJobRepository:
                     raise DuplicateArtifactError(
                         "platform content revision already exists for this job and platform"
                     )
-                if (
-                    same_lineage
-                    and existing.generation_attempt_id == content.generation_attempt_id
-                ):
+                if same_lineage and existing.generation_attempt_id == content.generation_attempt_id:
                     raise DuplicateArtifactError(
                         "platform content already exists for this generation attempt"
                     )
@@ -169,9 +173,7 @@ class InMemoryContentJobRepository:
             try:
                 return self._platform_contents[content_id]
             except KeyError as exc:
-                raise ArtifactNotFoundError(
-                    f"platform content not found: {content_id}"
-                ) from exc
+                raise ArtifactNotFoundError(f"platform content not found: {content_id}") from exc
 
     def list_platform_contents(
         self, job_id: str, *, platform: str | None = None
@@ -185,10 +187,7 @@ class InMemoryContentJobRepository:
                         content
                         for content in self._platform_contents.values()
                         if content.job_id == job_id
-                        and (
-                            normalized_platform is None
-                            or content.platform == normalized_platform
-                        )
+                        and (normalized_platform is None or content.platform == normalized_platform)
                     ),
                     key=lambda content: (content.platform, content.revision, content.id),
                 )
@@ -224,9 +223,7 @@ class InMemoryContentJobRepository:
             for content in contents:
                 existing = self._platform_contents.get(content.id)
                 if existing is None:
-                    raise ArtifactNotFoundError(
-                        f"platform content not found: {content.id}"
-                    )
+                    raise ArtifactNotFoundError(f"platform content not found: {content.id}")
                 immutable_identity = (
                     existing.job_id,
                     existing.master_content_id,
@@ -246,6 +243,218 @@ class InMemoryContentJobRepository:
             for content in contents:
                 self._platform_contents[content.id] = content
             self._commit_checkpoint(job, step)
+
+    def add_publication(self, publication: PublicationRequest) -> PublicationRequest:
+        with self._lock:
+            self.get(publication.job_id)
+            if publication.id in self._publications:
+                raise DuplicateArtifactError(f"publication already exists: {publication.id}")
+            existing = self.get_publication_by_idempotency_key(publication.idempotency_key)
+            if existing is not None:
+                return existing
+            self._publications[publication.id] = publication
+            self._publication_attempts[publication.id] = []
+            self._publication_receipts[publication.id] = []
+            return publication
+
+    def get_publication(self, publication_id: str) -> PublicationRequest:
+        with self._lock:
+            try:
+                return self._publications[publication_id]
+            except KeyError as exc:
+                raise ArtifactNotFoundError(f"publication not found: {publication_id}") from exc
+
+    def get_publication_by_idempotency_key(self, idempotency_key: str) -> PublicationRequest | None:
+        with self._lock:
+            return next(
+                (
+                    publication
+                    for publication in self._publications.values()
+                    if publication.idempotency_key == idempotency_key
+                ),
+                None,
+            )
+
+    def list_publications(self, job_id: str | None = None) -> tuple[PublicationRequest, ...]:
+        with self._lock:
+            values = (
+                publication
+                for publication in self._publications.values()
+                if job_id is None or publication.job_id == job_id
+            )
+            return tuple(sorted(values, key=lambda item: (item.created_at, item.id)))
+
+    def save_publication(self, publication: PublicationRequest) -> None:
+        with self._lock:
+            if publication.id not in self._publications:
+                raise ArtifactNotFoundError(f"publication not found: {publication.id}")
+            self._publications[publication.id] = publication
+
+    def add_publication_attempt(self, attempt: PublicationAttempt) -> None:
+        with self._lock:
+            if attempt.publication_id not in self._publications:
+                raise ArtifactNotFoundError(f"publication not found: {attempt.publication_id}")
+            attempts = self._publication_attempts[attempt.publication_id]
+            if any(
+                item.id == attempt.id or item.attempt_number == attempt.attempt_number
+                for item in attempts
+            ):
+                raise DuplicateArtifactError("publication attempt already exists")
+            attempts.append(attempt)
+
+    def list_publication_attempts(self, publication_id: str) -> tuple[PublicationAttempt, ...]:
+        with self._lock:
+            self.get_publication(publication_id)
+            return tuple(
+                sorted(
+                    self._publication_attempts[publication_id],
+                    key=lambda item: item.attempt_number,
+                )
+            )
+
+    def add_publication_receipt(self, receipt: PublicationReceipt) -> None:
+        with self._lock:
+            if receipt.publication_id not in self._publications:
+                raise ArtifactNotFoundError(f"publication not found: {receipt.publication_id}")
+            receipts = self._publication_receipts[receipt.publication_id]
+            if any(
+                item.id == receipt.id or item.item_index == receipt.item_index for item in receipts
+            ):
+                raise DuplicateArtifactError("publication receipt already exists")
+            receipts.append(receipt)
+
+    def list_publication_receipts(self, publication_id: str) -> tuple[PublicationReceipt, ...]:
+        with self._lock:
+            self.get_publication(publication_id)
+            return tuple(
+                sorted(
+                    self._publication_receipts[publication_id],
+                    key=lambda item: item.item_index,
+                )
+            )
+
+    def add_media_asset(self, asset: MediaAsset) -> None:
+        with self._lock:
+            self.get(asset.job_id)
+            if asset.id in self._media_assets:
+                raise DuplicateArtifactError(f"media asset already exists: {asset.id}")
+            if any(
+                item.platform_content_id == asset.platform_content_id and item.order == asset.order
+                for item in self._media_assets.values()
+            ):
+                raise DuplicateArtifactError("media asset order already exists")
+            self._media_assets[asset.id] = asset
+
+    def list_media_assets(self, platform_content_id: str) -> tuple[MediaAsset, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    (
+                        item
+                        for item in self._media_assets.values()
+                        if item.platform_content_id == platform_content_id
+                    ),
+                    key=lambda item: (item.order, item.id),
+                )
+            )
+
+    def claim_due_publications(
+        self,
+        *,
+        owner: str,
+        now: datetime,
+        lease_expires_at: datetime,
+        limit: int,
+    ) -> tuple[PublicationRequest, ...]:
+        with self._lock:
+            eligible = [
+                publication
+                for publication in self._publications.values()
+                if publication.status in {PublicationStatus.READY, PublicationStatus.SCHEDULED}
+                and (
+                    publication.status is PublicationStatus.READY
+                    or publication.scheduled_at is not None
+                    and publication.scheduled_at <= now
+                )
+                and (
+                    publication.claim_owner is None
+                    or publication.lease_expires_at is not None
+                    and publication.lease_expires_at <= now
+                )
+            ]
+            claimed = []
+            for publication in sorted(
+                eligible,
+                key=lambda item: (item.scheduled_at or item.created_at, item.id),
+            )[:limit]:
+                next_status = (
+                    PublicationStatus.READY
+                    if publication.status is PublicationStatus.SCHEDULED
+                    else publication.status
+                )
+                updated = replace(
+                    publication,
+                    status=next_status,
+                    claim_owner=owner,
+                    claimed_at=now,
+                    lease_expires_at=lease_expires_at,
+                    updated_at=now,
+                )
+                self._publications[updated.id] = updated
+                claimed.append(updated)
+            return tuple(claimed)
+
+    def claim_publication(
+        self,
+        publication_id: str,
+        *,
+        owner: str,
+        now: datetime,
+        lease_expires_at: datetime,
+    ) -> PublicationRequest | None:
+        with self._lock:
+            publication = self.get_publication(publication_id)
+            due = publication.status is PublicationStatus.READY or (
+                publication.status is PublicationStatus.SCHEDULED
+                and publication.scheduled_at is not None
+                and publication.scheduled_at <= now
+            )
+            claimable = publication.claim_owner is None or (
+                publication.lease_expires_at is not None and publication.lease_expires_at <= now
+            )
+            if not due or not claimable:
+                return None
+            updated = replace(
+                publication,
+                status=PublicationStatus.READY,
+                claim_owner=owner,
+                claimed_at=now,
+                lease_expires_at=lease_expires_at,
+                updated_at=now,
+            )
+            self._publications[publication_id] = updated
+            return updated
+
+    def recover_expired_publications(self, *, now: datetime) -> tuple[PublicationRequest, ...]:
+        with self._lock:
+            recovered = []
+            for publication in tuple(self._publications.values()):
+                if (
+                    publication.status is PublicationStatus.PUBLISHING
+                    and publication.lease_expires_at is not None
+                    and publication.lease_expires_at <= now
+                ):
+                    updated = replace(
+                        publication,
+                        status=PublicationStatus.NEEDS_RECONCILIATION,
+                        claim_owner=None,
+                        claimed_at=None,
+                        lease_expires_at=None,
+                        updated_at=now,
+                    )
+                    self._publications[updated.id] = updated
+                    recovered.append(updated)
+            return tuple(recovered)
 
     def _validate_checkpoint(self, job: ContentJob, step: JobStep) -> None:
         current = self.get(job.id)

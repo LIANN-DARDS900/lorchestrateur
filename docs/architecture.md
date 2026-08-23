@@ -4,8 +4,10 @@
 
 Maintain a small, production-minded core that makes workflow and content-intelligence execution
 explicit, traceable, and safe to extend. A server-rendered Flask adapter now exposes the engine
-without moving business logic into HTTP controllers. The project still deliberately avoids a
-background queue, AI framework/SDK coupling, publishing adapters, analytics, and a SPA build chain.
+without moving business logic into HTTP controllers. A registry-based publication boundary now
+adds approved-only delivery, SQLite scheduling, receipts, and reconciliation without a distributed
+queue. The project still deliberately avoids AI framework/SDK coupling, analytics, and a SPA build
+chain.
 
 ## Technology decision
 
@@ -32,6 +34,9 @@ workflow changes.
 6. **Web** — application factory, composition root, thin routes, CSRF enforcement, presenters,
    Jinja templates, and static assets. The web layer imports application contracts; core layers do
    not import Flask.
+7. **Publishing** — typed publication/media contracts, a platform registry, authorization and
+   idempotency service, isolated remote adapters, and a small claim-based worker. Publishing imports
+   domain/repository contracts but orchestration does not import remote protocols.
 
 Dependencies point inward: adapters know core contracts; the domain does not know SQLite, provider
 SDKs, web frameworks, or social networks. Production adapters use an injected standard-library HTTP
@@ -63,7 +68,7 @@ quality threshold; valid variants are retained.
 
 ## Trace and persistence model
 
-The schema contains only the records required through Production AI V1:
+The schema contains only the records required through Governed Publishing V1:
 
 - `content_jobs` — current checkpoint, version, targets, repair count, and timestamps
 - `job_steps` — ordered transition/event trace with non-secret structured metadata
@@ -72,6 +77,11 @@ The schema contains only the records required through Production AI V1:
 - `master_contents` — validated canonical content, one per content job
 - `platform_contents` — typed payload JSON, canonical linkage, logical attempt, revision,
   generation metadata, validation issues, and quality breakdown
+- `publication_requests` — explicit delivery decision, exact content linkage, schedule, policy,
+  status, idempotency key, and expiring claim
+- `publication_attempts` — bounded execution outcomes and sanitized error classifications
+- `publication_receipts` — ordered durable delivery evidence without raw responses or content
+- `media_assets` — external Instagram media references and order, never binary blobs
 
 Artifact, state update, and step insertion are atomic. Prompts, excerpts, and generated content are
 not written into generic trace metadata. No generic AI-request table exists because generation
@@ -86,10 +96,10 @@ excerpts, Authorization headers, response bodies, or generated content.
 
 Near-term additions should preserve these boundaries:
 
-1. Add publishing adapters only after per-platform credentials, idempotency, retry, and audit policies
+1. Harden live reconciliation as each selected platform exposes safe lookup capabilities.
+2. Add analytics ingestion only after receipt identity, consent, retention, and metric definitions
    are approved.
-2. Add delivery receipts and publication reconciliation before analytics or a learning loop.
-3. Introduce authentication, migration tooling, PostgreSQL, and bounded background execution before
+3. Introduce authentication, migration tooling, PostgreSQL, and stronger worker coordination before
    any shared or hosted deployment.
 
 ## Product-owner decisions still needed

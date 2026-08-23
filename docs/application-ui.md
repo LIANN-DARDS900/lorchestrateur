@@ -5,8 +5,9 @@
 Application UI V1 makes L’Orchestrateur usable from a browser while preserving the existing domain
 and application services as the source of truth. It supports content creation, manual evidence
 review, governed AI execution, structured artifact presentation, deterministic quality inspection,
-one controlled human revision, and explicit approval. It does not publish, schedule, crawl, measure
-engagement, or manage social-network credentials.
+one controlled human revision, and explicit approval. Phase 6 adds a separate publication workspace
+through the application service documented in `publishing.md`; this UI layer still does not crawl,
+measure engagement, generate media, or manage credentials in HTML forms.
 
 ## Architecture
 
@@ -38,7 +39,8 @@ busy state, but the HTTP request remains open while generation runs.
 5. Inspect strategy, canonical master content, distinct channel adaptations, source links,
    validation results, quality score breakdowns, and trace history.
 6. Approve only after the job reaches `awaiting_approval`, or request one controlled revision.
-7. Approved content remains stored locally. No publication action exists.
+7. Approved content remains stored until a separate publication preview and explicit delivery or
+   scheduling action is confirmed.
 
 ## Demo and real AI modes
 
@@ -75,7 +77,7 @@ untrusted `safe` rendering. Forms validate platform allowlists, source types, UR
 state, and resource existence. Request bodies are capped at 1 MB. Route handlers use repository and
 application contracts rather than raw SQL.
 
-Provider keys remain environment-managed. The provider page reports only configured/not configured,
+AI and publication credentials remain environment-managed. The provider page reports only configured/not configured,
 model, enabled state, order, and declared cost class. Safe error pages never render exceptions,
 environment values, database paths, raw provider responses, or credentials. Generic logs record the
 exception type without recording the arbitrary exception message.
@@ -103,4 +105,6 @@ scene plans for Instagram, and a contextual post for Facebook. Raw JSON is not d
   there is no unlimited “generate again” action.
 - Human revision guidance is deliberately absent from generic traces and is not durable across a
   process interruption during that one synchronous regeneration request.
-- No authentication, shared workspaces, publishing, scheduling, analytics, or automated research.
+- Publication coordination is a single-host SQLite worker, not a distributed queue.
+- No authentication, shared workspaces, analytics, automated research, media generation, or remote
+  deletion.

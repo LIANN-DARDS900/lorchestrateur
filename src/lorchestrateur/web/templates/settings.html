@@ -6,6 +6,9 @@
   <article class="panel setting-card"><span class="card-label">Seuil qualité</span><strong>{{ quality_threshold }} / 100</strong><p>Score minimum requis après validation déterministe pour accéder à l’approbation.</p></article>
   <article class="panel setting-card"><span class="card-label">Mode IA</span><strong>{{ 'Démonstration' if app_ai_mode == 'demo' else 'Fournisseurs réels' }}</strong><p>Le changement de mode se fait par configuration, sans logique fournisseur dans l’interface.</p></article>
   <article class="panel setting-card"><span class="card-label">Persistance</span><strong>{{ database_kind }}</strong><p>Les workflows et artefacts sont conservés dans le dépôt applicatif existant.</p></article>
+  <article class="panel setting-card"><span class="card-label">Mode publication</span><strong>{{ publishing_mode }}</strong><p>Le mode réel n’est jamais déduit de la seule présence d’identifiants.</p></article>
+  <article class="panel setting-card"><span class="card-label">Politique de livraison</span><strong>{{ publishing_policy }}</strong><p>La simulation contrôle les charges utiles sans contacter les plateformes.</p></article>
+  <article class="panel setting-card"><span class="card-label">Fuseau applicatif</span><strong>{{ app_timezone }}</strong><p>Les programmations sont résolues explicitement puis conservées avec leur décalage.</p></article>
 </section>
-<div class="notice"><strong>Identifiants gérés par l’environnement</strong><span>Les clés Gemini et OpenRouter ne sont jamais saisies ni affichées dans cette interface.</span></div>
+<div class="notice"><strong>Identifiants gérés par l’environnement</strong><span>Les clés IA et les jetons de publication ne sont jamais saisis ni affichés dans cette interface.</span></div>
 {% endblock %}

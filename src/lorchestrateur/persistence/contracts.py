@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
 from lorchestrateur.domain.content import ContentStrategy, MasterContent, SourceEvidence
 from lorchestrateur.domain.platform_content import PlatformContentRecord
+from lorchestrateur.domain.publication import (
+    MediaAsset,
+    PublicationAttempt,
+    PublicationReceipt,
+    PublicationRequest,
+)
 from lorchestrateur.domain.workflow import ContentJob, JobStep
 
 
@@ -86,3 +93,49 @@ class ContentIntelligenceRepository(ContentJobRepository, Protocol):
         job: ContentJob,
         step: JobStep,
     ) -> None: ...
+
+
+class PublicationRepository(ContentIntelligenceRepository, Protocol):
+    def add_publication(self, publication: PublicationRequest) -> PublicationRequest: ...
+
+    def get_publication(self, publication_id: str) -> PublicationRequest: ...
+
+    def get_publication_by_idempotency_key(
+        self, idempotency_key: str
+    ) -> PublicationRequest | None: ...
+
+    def list_publications(self, job_id: str | None = None) -> tuple[PublicationRequest, ...]: ...
+
+    def save_publication(self, publication: PublicationRequest) -> None: ...
+
+    def add_publication_attempt(self, attempt: PublicationAttempt) -> None: ...
+
+    def list_publication_attempts(self, publication_id: str) -> tuple[PublicationAttempt, ...]: ...
+
+    def add_publication_receipt(self, receipt: PublicationReceipt) -> None: ...
+
+    def list_publication_receipts(self, publication_id: str) -> tuple[PublicationReceipt, ...]: ...
+
+    def add_media_asset(self, asset: MediaAsset) -> None: ...
+
+    def list_media_assets(self, platform_content_id: str) -> tuple[MediaAsset, ...]: ...
+
+    def claim_due_publications(
+        self,
+        *,
+        owner: str,
+        now: datetime,
+        lease_expires_at: datetime,
+        limit: int,
+    ) -> tuple[PublicationRequest, ...]: ...
+
+    def claim_publication(
+        self,
+        publication_id: str,
+        *,
+        owner: str,
+        now: datetime,
+        lease_expires_at: datetime,
+    ) -> PublicationRequest | None: ...
+
+    def recover_expired_publications(self, *, now: datetime) -> tuple[PublicationRequest, ...]: ...

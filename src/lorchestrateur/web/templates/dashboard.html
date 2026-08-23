@@ -18,6 +18,18 @@
   <article class="stat-card"><span>Attention</span><strong>{{ dashboard.attention }}</strong><small>en pause ou en échec</small></article>
 </section>
 
+<section class="panel publication-ops">
+  <div class="panel-heading"><div><p class="eyebrow">Opérations de publication</p><h2>Livraisons gouvernées</h2></div></div>
+  <div class="compact-stats">
+    <div><span>Programmées</span><strong>{{ dashboard.publication.scheduled }}</strong></div>
+    <div><span>En livraison</span><strong>{{ dashboard.publication.publishing }}</strong></div>
+    <div><span>Livrées</span><strong>{{ dashboard.publication.published }}</strong></div>
+    <div><span>Échecs</span><strong>{{ dashboard.publication.failed }}</strong></div>
+    <div><span>À réconcilier</span><strong>{{ dashboard.publication.reconciliation }}</strong></div>
+  </div>
+  <p class="field-help">Données opérationnelles uniquement — aucune métrique d’engagement n’est inventée.</p>
+</section>
+
 <section class="panel">
   <div class="panel-heading">
     <div><p class="eyebrow">Activité récente</p><h2>Derniers contenus</h2></div>
