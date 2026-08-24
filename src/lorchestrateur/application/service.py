@@ -81,6 +81,7 @@ class OrchestrationService:
         *,
         ai_router: AIRouter | None = None,
         quality_policy: QualityPolicy | None = None,
+        learning_context_provider: Callable[[ContentJob], Mapping[str, Any]] | None = None,
         clock: Callable[[], datetime] = utc_now,
         id_factory: Callable[[], str] = lambda: str(uuid4()),
         timer: Callable[[], float] = perf_counter,
@@ -93,6 +94,7 @@ class OrchestrationService:
             repository,
             state_machine,
             ai_router=ai_router,
+            learning_context_provider=learning_context_provider,
             clock=clock,
             id_factory=id_factory,
             timer=timer,
@@ -177,14 +179,10 @@ class OrchestrationService:
             human_guidance=human_guidance,
         )
 
-    def evaluate_platform_adaptations(
-        self, job_id: str
-    ) -> PlatformEvaluationOutcome:
+    def evaluate_platform_adaptations(self, job_id: str) -> PlatformEvaluationOutcome:
         return self._platform_adaptation.evaluate_platforms(job_id)
 
-    def validate_platform_adaptations(
-        self, job_id: str
-    ) -> PlatformEvaluationOutcome:
+    def validate_platform_adaptations(self, job_id: str) -> PlatformEvaluationOutcome:
         """Named alias matching the deterministic validation stage."""
 
         return self.evaluate_platform_adaptations(job_id)
@@ -220,9 +218,7 @@ class OrchestrationService:
             raise OrchestrationConfigurationError("AI router is not configured")
 
         try:
-            response = self._ai_router.generate(
-                request, preferred_provider=preferred_provider
-            )
+            response = self._ai_router.generate(request, preferred_provider=preferred_provider)
         except AIUnavailableError as exc:
             attempts = [
                 {

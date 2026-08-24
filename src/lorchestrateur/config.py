@@ -71,6 +71,16 @@ def _parse_positive_int(name: str, raw_value: str, *, maximum: int) -> int:
     return value
 
 
+def _parse_minimum_sample_size(raw_value: str) -> int:
+    try:
+        value = int(raw_value.strip())
+    except ValueError as exc:
+        raise ConfigurationError("LEARNING_MIN_SAMPLE_SIZE must be an integer") from exc
+    if not 2 <= value <= 1000:
+        raise ConfigurationError("LEARNING_MIN_SAMPLE_SIZE must be between 2 and 1000")
+    return value
+
+
 def _parse_collection_offsets(raw_value: str) -> tuple[int, ...]:
     try:
         values = tuple(int(item.strip()) for item in raw_value.split(",") if item.strip())
@@ -177,6 +187,14 @@ class Settings:
     x_analytics_bearer_token: str | None = field(default=None, repr=False)
     meta_analytics_enabled: bool = False
     meta_analytics_access_token: str | None = field(default=None, repr=False)
+    learning_enabled: bool = False
+    learning_mode: str = "demo"
+    learning_apply_enabled: bool = True
+    learning_min_sample_size: int = 5
+    learning_min_effect_percent: int = 15
+    learning_max_evidence_age_days: int = 365
+    learning_recommendation_ttl_days: int = 180
+    learning_window_tolerance_hours: int = 2
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
@@ -198,6 +216,9 @@ class Settings:
         analytics_adapter_mode = source.get("ANALYTICS_ADAPTER_MODE", "demo").strip().lower()
         if analytics_adapter_mode not in {"demo", "real"}:
             raise ConfigurationError("ANALYTICS_ADAPTER_MODE must be demo or real")
+        learning_mode = source.get("LEARNING_MODE", "demo").strip().lower()
+        if learning_mode not in {"demo", "live"}:
+            raise ConfigurationError("LEARNING_MODE must be demo or live")
         web_host = source.get("WEB_HOST", "127.0.0.1").strip()
         if not web_host:
             raise ConfigurationError("WEB_HOST cannot be empty")
@@ -361,4 +382,34 @@ class Settings:
                 "META_ANALYTICS_ENABLED", source.get("META_ANALYTICS_ENABLED", "false")
             ),
             meta_analytics_access_token=_optional_value(source.get("META_ANALYTICS_ACCESS_TOKEN")),
+            learning_enabled=_parse_bool(
+                "LEARNING_ENABLED", source.get("LEARNING_ENABLED", "false")
+            ),
+            learning_mode=learning_mode,
+            learning_apply_enabled=_parse_bool(
+                "LEARNING_APPLY_ENABLED",
+                source.get("LEARNING_APPLY_ENABLED", "true"),
+            ),
+            learning_min_sample_size=_parse_minimum_sample_size(
+                source.get("LEARNING_MIN_SAMPLE_SIZE", "5")
+            ),
+            learning_min_effect_percent=_parse_quality_score(
+                "LEARNING_MIN_EFFECT_PERCENT",
+                source.get("LEARNING_MIN_EFFECT_PERCENT", "15"),
+            ),
+            learning_max_evidence_age_days=_parse_positive_int(
+                "LEARNING_MAX_EVIDENCE_AGE_DAYS",
+                source.get("LEARNING_MAX_EVIDENCE_AGE_DAYS", "365"),
+                maximum=3650,
+            ),
+            learning_recommendation_ttl_days=_parse_positive_int(
+                "LEARNING_RECOMMENDATION_TTL_DAYS",
+                source.get("LEARNING_RECOMMENDATION_TTL_DAYS", "180"),
+                maximum=3650,
+            ),
+            learning_window_tolerance_hours=_parse_positive_int(
+                "LEARNING_WINDOW_TOLERANCE_HOURS",
+                source.get("LEARNING_WINDOW_TOLERANCE_HOURS", "2"),
+                maximum=24,
+            ),
         )

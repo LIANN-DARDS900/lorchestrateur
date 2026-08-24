@@ -4,14 +4,15 @@ L'Orchestrateur is a deterministic-first system for governed content intelligenc
 orchestration. It turns an idea and reviewed evidence into a structured strategy and durable
 canonical master content—not autonomous agent conversations.
 
-> **Project status:** Performance Intelligence V1. The repository implements an evidence-aware pipeline using
+> **Project status:** Governed Learning & Optimization V1. The repository implements an evidence-aware pipeline using
 > governed Gemini and OpenRouter adapters, free-first routing, typed structured generation, and a
 > professional local French web application for creating, reviewing, and approving durable Blog,
 > X, Instagram, and Facebook variants. Approved content can be previewed, simulated, scheduled, and
 > delivered through governed publication adapters with durable receipts. Publication-linked
-> analytics now records transparent historical metric snapshots and data freshness without changing
-> future content decisions. Automated optimization, research, media generation, remote deletion,
-> and enterprise authentication are not implemented.
+> analytics records transparent historical metric snapshots and data freshness. Deterministic cohort
+> comparisons can now propose scoped recommendations, but only a human-accepted profile may guide a
+> future strategy request. Autonomous optimization, research, media generation, remote deletion, and
+> enterprise authentication are not implemented.
 
 ## Current foundation
 
@@ -54,10 +55,17 @@ canonical master content—not autonomous agent conversations.
 - Isolated X and Meta analytics adapters with classified failures and bounded retries
 - Missing-versus-zero integrity, freshness indicators, configurable retention, and manual cooldowns
 - French cross-platform Performance views with accessible server-rendered metric trends
+- Fixed-window X and Instagram cohort comparisons with median-first, outlier-resistant statistics
+- Explainable evidence-strength breakdowns and immutable snapshot/publication provenance
+- Durable recommendation proposals with human accept/reject, expiry, contradiction, and supersession
+- Scoped, opt-in learning profiles that preserve explicit user-constraint precedence
+- Strict demo/live learning isolation and learning disabled by default
 
 Architecture details are in [docs/architecture.md](docs/architecture.md) and
 [docs/content-intelligence.md](docs/content-intelligence.md). Governed metric semantics and live
 adapter limits are documented in [docs/analytics.md](docs/analytics.md).
+Governed cohort semantics and the human decision boundary are documented in
+[docs/learning.md](docs/learning.md).
 
 ## Workflow model
 
@@ -100,6 +108,7 @@ src/lorchestrateur/
   platforms/     platform contract, registry, initial definitions
   publishing/    contracts, registry, safety service, live/demo platform adapters
   analytics/     typed metrics, adapter registry, collection service, live/demo adapters
+  learning/      deterministic cohort statistics, recommendations, and profile governance
   web/           Flask adapter, presenters, French templates, demo composition, static assets
   worker.py      durable SQLite schedule polling and claim execution
   analytics_worker.py  durable receipt-linked metric polling and retention
@@ -168,6 +177,11 @@ not contain credentials or automatically send credentials to clients.
 | `ANALYTICS_MIN_REFRESH_SECONDS` | `300` | Manual refresh cooldown per receipt |
 | `ANALYTICS_STALE_AFTER_SECONDS` | `7200` | Age after which observed data is labelled stale |
 | `ANALYTICS_RETENTION_DAYS` | `730` | Local historical snapshot retention |
+| `LEARNING_ENABLED` | `false` | Explicit authorization for cohort analysis |
+| `LEARNING_MODE` | `demo` | Strictly isolated `demo` or `live` learning data |
+| `LEARNING_APPLY_ENABLED` | `true` | Permit accepted profiles in opt-in future jobs |
+| `LEARNING_MIN_SAMPLE_SIZE` | `5` | Minimum publications required in each cohort |
+| `LEARNING_MIN_EFFECT_PERCENT` | `15` | Median difference needed for a format-test proposal |
 
 Cost classification is configuration-driven. Only `free` is eligible while paid AI is disabled;
 both `paid` and `unknown` fail closed. A model name or provider label never implies permanent free
@@ -204,6 +218,12 @@ pass. Real analytics remains disabled by default and requires separate platform 
 credentials, and permissions. Missing metrics display as unavailable, not zero. See
 [docs/analytics.md](docs/analytics.md) for platform metric support, cumulative semantics, freshness,
 retention, and manual live-collection steps.
+
+Open **Apprentissage** to compare eligible X or Instagram formats within an explicit topic,
+objective, and fixed window. Set `LEARNING_ENABLED=true` to permit analysis; demo remains the default
+and is persistently labelled. Insufficient samples create no recommendation. Accepting a proposal is
+a separate human decision, and each future workflow can opt out or override it with an explicit
+constraint. See [docs/learning.md](docs/learning.md) for formulas, provenance, lifecycle, and limits.
 
 For governed real-provider execution, configure Gemini and/or OpenRouter as documented, declare the
 current model cost class, set `APP_AI_MODE=real`, and restart the same command. The UI contains no
@@ -289,6 +309,11 @@ The automated suite covers:
 - deterministic no-network demo analytics plus mocked X, Instagram, and Facebook protocol behavior
 - bounded analytics retry/rate-limit handling that preserves previous history
 - French performance summaries, trends, freshness, collection errors, and governed manual refresh
+- median/mean statistics, outlier behavior, minimum samples, fixed windows, and evidence strength
+- demo/live isolation, provenance, idempotent observations, and SQLite learning round trips
+- recommendation proposal, rejection, acceptance, expiry, contradiction, and supersession
+- future-strategy opt-in, target/scope filtering, rejected-profile exclusion, and user precedence
+- French learning dashboard, CSRF, escaping, disabled-policy behavior, and credential safety
 
 Tests use only local fakes and in-memory HTTP transports; they require no API credentials, network
 access, provider quota, or paid services.
@@ -297,7 +322,7 @@ access, provider quota, or paid services.
 
 - Automated web research/crawling
 - Image or video generation for Instagram concepts
-- Automated optimization, performance advice, experiments, and learning loops
+- Autonomous optimization, AI performance advice, experiments, and silent learning loops
 - CMS-specific Blog publishing, remote deletion, enterprise authentication, and multi-user collaboration
 - PostgreSQL adapter and production schema migrations
 

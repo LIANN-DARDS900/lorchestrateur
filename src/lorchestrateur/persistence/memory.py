@@ -12,6 +12,17 @@ from lorchestrateur.domain.analytics import (
     MetricSnapshot,
 )
 from lorchestrateur.domain.content import ContentStrategy, MasterContent, SourceEvidence
+from lorchestrateur.domain.learning import (
+    JobLearningContext,
+    LearningAnalysisRun,
+    LearningAuditEvent,
+    LearningMode,
+    LearningProfile,
+    LearningProfileEntry,
+    OptimizationRecommendation,
+    PerformanceObservation,
+    RecommendationStatus,
+)
 from lorchestrateur.domain.platform_content import PlatformContentRecord
 from lorchestrateur.domain.publication import (
     MediaAsset,
@@ -45,6 +56,13 @@ class InMemoryContentJobRepository:
         self._metric_definitions: dict[str, MetricDefinition] = {}
         self._analytics_runs: dict[str, AnalyticsCollectionRun] = {}
         self._metric_snapshots: dict[str, MetricSnapshot] = {}
+        self._job_learning_contexts: dict[str, JobLearningContext] = {}
+        self._learning_runs: dict[str, LearningAnalysisRun] = {}
+        self._performance_observations: dict[str, PerformanceObservation] = {}
+        self._optimization_recommendations: dict[str, OptimizationRecommendation] = {}
+        self._learning_profiles: dict[str, LearningProfile] = {}
+        self._learning_profile_entries: dict[str, LearningProfileEntry] = {}
+        self._learning_events: dict[str, LearningAuditEvent] = {}
         self._lock = RLock()
 
     def add(self, job: ContentJob) -> None:
@@ -590,6 +608,234 @@ class InMemoryContentJobRepository:
             for snapshot_id in removable:
                 del self._metric_snapshots[snapshot_id]
             return len(removable)
+
+    def save_job_learning_context(self, context: JobLearningContext) -> None:
+        with self._lock:
+            self.get(context.job_id)
+            self._job_learning_contexts[context.job_id] = context
+
+    def get_job_learning_context(self, job_id: str) -> JobLearningContext | None:
+        with self._lock:
+            self.get(job_id)
+            return self._job_learning_contexts.get(job_id)
+
+    def add_learning_run(self, run: LearningAnalysisRun) -> LearningAnalysisRun:
+        with self._lock:
+            existing = self.get_learning_run_by_idempotency_key(run.idempotency_key)
+            if existing is not None:
+                return existing
+            if run.id in self._learning_runs:
+                raise DuplicateArtifactError(f"learning run already exists: {run.id}")
+            self._learning_runs[run.id] = run
+            return run
+
+    def get_learning_run_by_idempotency_key(
+        self, idempotency_key: str
+    ) -> LearningAnalysisRun | None:
+        with self._lock:
+            return next(
+                (
+                    item
+                    for item in self._learning_runs.values()
+                    if item.idempotency_key == idempotency_key
+                ),
+                None,
+            )
+
+    def list_learning_runs(self) -> tuple[LearningAnalysisRun, ...]:
+        with self._lock:
+            return tuple(
+                sorted(self._learning_runs.values(), key=lambda item: (item.started_at, item.id))
+            )
+
+    def add_performance_observation(
+        self, observation: PerformanceObservation
+    ) -> PerformanceObservation:
+        with self._lock:
+            existing = self.get_observation_for_run(observation.analysis_run_id)
+            if existing is not None:
+                return existing
+            if observation.id in self._performance_observations:
+                raise DuplicateArtifactError(f"observation already exists: {observation.id}")
+            self._performance_observations[observation.id] = observation
+            return observation
+
+    def get_observation_for_run(self, run_id: str) -> PerformanceObservation | None:
+        with self._lock:
+            return next(
+                (
+                    item
+                    for item in self._performance_observations.values()
+                    if item.analysis_run_id == run_id
+                ),
+                None,
+            )
+
+    def list_performance_observations(self) -> tuple[PerformanceObservation, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    self._performance_observations.values(),
+                    key=lambda item: (item.created_at, item.id),
+                    reverse=True,
+                )
+            )
+
+    def add_optimization_recommendation(
+        self, recommendation: OptimizationRecommendation
+    ) -> OptimizationRecommendation:
+        with self._lock:
+            existing = next(
+                (
+                    item
+                    for item in self._optimization_recommendations.values()
+                    if item.observation_id == recommendation.observation_id
+                ),
+                None,
+            )
+            if existing is not None:
+                return existing
+            if recommendation.id in self._optimization_recommendations:
+                raise DuplicateArtifactError(f"recommendation already exists: {recommendation.id}")
+            self._optimization_recommendations[recommendation.id] = recommendation
+            return recommendation
+
+    def save_optimization_recommendation(self, recommendation: OptimizationRecommendation) -> None:
+        with self._lock:
+            if recommendation.id not in self._optimization_recommendations:
+                raise ArtifactNotFoundError(f"recommendation not found: {recommendation.id}")
+            self._optimization_recommendations[recommendation.id] = recommendation
+
+    def get_optimization_recommendation(self, recommendation_id: str) -> OptimizationRecommendation:
+        with self._lock:
+            try:
+                return self._optimization_recommendations[recommendation_id]
+            except KeyError as exc:
+                raise ArtifactNotFoundError(
+                    f"recommendation not found: {recommendation_id}"
+                ) from exc
+
+    def get_recommendation_for_run(self, run_id: str) -> OptimizationRecommendation | None:
+        with self._lock:
+            observation = self.get_observation_for_run(run_id)
+            if observation is None:
+                return None
+            return next(
+                (
+                    item
+                    for item in self._optimization_recommendations.values()
+                    if item.observation_id == observation.id
+                ),
+                None,
+            )
+
+    def list_optimization_recommendations(
+        self,
+        *,
+        workspace_id: str | None = None,
+        status: RecommendationStatus | None = None,
+    ) -> tuple[OptimizationRecommendation, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    (
+                        item
+                        for item in self._optimization_recommendations.values()
+                        if (workspace_id is None or item.workspace_id == workspace_id)
+                        and (status is None or item.status is status)
+                    ),
+                    key=lambda item: (item.created_at, item.id),
+                    reverse=True,
+                )
+            )
+
+    def add_learning_profile(self, profile: LearningProfile) -> LearningProfile:
+        with self._lock:
+            existing = self.get_learning_profile(profile.workspace_id, profile.mode)
+            if existing is not None:
+                return existing
+            if profile.id in self._learning_profiles:
+                raise DuplicateArtifactError(f"learning profile already exists: {profile.id}")
+            self._learning_profiles[profile.id] = profile
+            return profile
+
+    def get_learning_profile(self, workspace_id: str, mode: LearningMode) -> LearningProfile | None:
+        with self._lock:
+            return next(
+                (
+                    item
+                    for item in self._learning_profiles.values()
+                    if item.workspace_id == workspace_id and item.mode is mode
+                ),
+                None,
+            )
+
+    def add_learning_profile_entry(self, entry: LearningProfileEntry) -> LearningProfileEntry:
+        with self._lock:
+            if entry.profile_id not in self._learning_profiles:
+                raise ArtifactNotFoundError(f"learning profile not found: {entry.profile_id}")
+            existing = next(
+                (
+                    item
+                    for item in self._learning_profile_entries.values()
+                    if item.recommendation_id == entry.recommendation_id
+                ),
+                None,
+            )
+            if existing is not None:
+                return existing
+            self._learning_profile_entries[entry.id] = entry
+            return entry
+
+    def save_learning_profile_entry(self, entry: LearningProfileEntry) -> None:
+        with self._lock:
+            if entry.id not in self._learning_profile_entries:
+                raise ArtifactNotFoundError(f"learning profile entry not found: {entry.id}")
+            self._learning_profile_entries[entry.id] = entry
+
+    def list_learning_profile_entries(
+        self,
+        *,
+        workspace_id: str | None = None,
+        recommendation_id: str | None = None,
+        active_only: bool = False,
+    ) -> tuple[LearningProfileEntry, ...]:
+        with self._lock:
+            profile_ids = {
+                item.id
+                for item in self._learning_profiles.values()
+                if workspace_id is None or item.workspace_id == workspace_id
+            }
+            return tuple(
+                sorted(
+                    (
+                        item
+                        for item in self._learning_profile_entries.values()
+                        if item.profile_id in profile_ids
+                        and (
+                            recommendation_id is None or item.recommendation_id == recommendation_id
+                        )
+                        and (not active_only or item.active)
+                    ),
+                    key=lambda item: (item.accepted_at, item.id),
+                    reverse=True,
+                )
+            )
+
+    def add_learning_event(self, event: LearningAuditEvent) -> None:
+        with self._lock:
+            if event.id in self._learning_events:
+                raise DuplicateArtifactError(f"learning event already exists: {event.id}")
+            self._learning_events[event.id] = event
+
+    def list_learning_events(self) -> tuple[LearningAuditEvent, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    self._learning_events.values(),
+                    key=lambda item: (item.created_at, item.id),
+                )
+            )
 
     def _validate_checkpoint(self, job: ContentJob, step: JobStep) -> None:
         current = self.get(job.id)

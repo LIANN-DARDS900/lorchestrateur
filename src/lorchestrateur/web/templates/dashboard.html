@@ -18,6 +18,17 @@
   <article class="stat-card"><span>Attention</span><strong>{{ dashboard.attention }}</strong><small>en pause ou en échec</small></article>
 </section>
 
+<section class="panel publication-ops">
+  <div class="panel-heading"><div><p class="eyebrow">Learning Intelligence</p><h2>Décisions d’optimisation gouvernées</h2></div><a class="text-link" href="{{ url_for('web.learning_overview') }}">Ouvrir Apprentissage</a></div>
+  <div class="compact-stats learning-stats">
+    <div><span>Observations</span><strong>{{ dashboard.learning.observations }}</strong></div>
+    <div><span>À décider</span><strong>{{ dashboard.learning.proposed }}</strong></div>
+    <div><span>Profils actifs</span><strong>{{ dashboard.learning.active }}</strong></div>
+    <div><span>Politique</span><strong class="compact-date">{{ 'Active' if dashboard.learning.enabled else 'Désactivée' }}</strong></div>
+  </div>
+  <p class="field-help">Corrélations transparentes et acceptation humaine — aucune boucle autonome.</p>
+</section>
+
 <section class="panel publication-ops performance-summary">
   <div class="panel-heading"><div><p class="eyebrow">Performance Intelligence</p><h2>Mesure publication-liée</h2></div><a class="text-link" href="{{ url_for('web.analytics_overview') }}">Ouvrir Performance</a></div>
   <div class="compact-stats">

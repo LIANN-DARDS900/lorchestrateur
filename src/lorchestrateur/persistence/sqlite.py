@@ -30,6 +30,21 @@ from lorchestrateur.domain.content import (
     SourceType,
     StrategyKeyMessage,
 )
+from lorchestrateur.domain.learning import (
+    CohortDefinition,
+    EvidenceStrength,
+    JobLearningContext,
+    LearningAnalysisRun,
+    LearningAuditEvent,
+    LearningMode,
+    LearningProfile,
+    LearningProfileEntry,
+    LearningRunStatus,
+    OptimizationRecommendation,
+    PerformanceObservation,
+    RecommendationKind,
+    RecommendationStatus,
+)
 from lorchestrateur.domain.platform_content import (
     PlatformContentRecord,
     PlatformValidationStatus,
@@ -315,6 +330,119 @@ class SQLiteContentJobRepository:
                     UNIQUE(collection_run_id, metric_key)
                 );
 
+                CREATE TABLE IF NOT EXISTS job_learning_contexts (
+                    job_id TEXT PRIMARY KEY REFERENCES content_jobs(id) ON DELETE CASCADE,
+                    workspace_id TEXT NOT NULL,
+                    topic_category TEXT NOT NULL,
+                    objective TEXT NOT NULL,
+                    use_learning INTEGER NOT NULL,
+                    mode TEXT NOT NULL,
+                    explicit_constraints TEXT NOT NULL,
+                    applied_profile_entry_ids TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS learning_analysis_runs (
+                    id TEXT PRIMARY KEY,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    workspace_id TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    cohort_a TEXT NOT NULL,
+                    cohort_b TEXT NOT NULL,
+                    algorithm_version TEXT NOT NULL,
+                    minimum_sample_size INTEGER NOT NULL,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    status TEXT NOT NULL,
+                    sample_count_a INTEGER NOT NULL,
+                    sample_count_b INTEGER NOT NULL,
+                    failure_classification TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS performance_observations (
+                    id TEXT PRIMARY KEY,
+                    analysis_run_id TEXT NOT NULL UNIQUE
+                        REFERENCES learning_analysis_runs(id) ON DELETE CASCADE,
+                    workspace_id TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    platform TEXT NOT NULL,
+                    metric_key TEXT NOT NULL,
+                    window_hours INTEGER NOT NULL,
+                    cohort_a_format TEXT NOT NULL,
+                    cohort_b_format TEXT NOT NULL,
+                    sample_count_a INTEGER NOT NULL,
+                    sample_count_b INTEGER NOT NULL,
+                    median_a TEXT NOT NULL,
+                    median_b TEXT NOT NULL,
+                    mean_a TEXT NOT NULL,
+                    mean_b TEXT NOT NULL,
+                    relative_difference_percent TEXT NOT NULL,
+                    evidence_strength TEXT NOT NULL,
+                    evidence_breakdown TEXT NOT NULL,
+                    publication_ids TEXT NOT NULL,
+                    receipt_ids TEXT NOT NULL,
+                    snapshot_ids TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS optimization_recommendations (
+                    id TEXT PRIMARY KEY,
+                    observation_id TEXT NOT NULL UNIQUE
+                        REFERENCES performance_observations(id) ON DELETE CASCADE,
+                    workspace_id TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    platform TEXT NOT NULL,
+                    topic_category TEXT NOT NULL,
+                    objective TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    parameters TEXT NOT NULL,
+                    rationale TEXT NOT NULL,
+                    evidence_strength TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    decided_at TEXT,
+                    decided_by TEXT,
+                    decision_reason TEXT,
+                    potentially_outdated INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS learning_profiles (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(workspace_id, mode)
+                );
+
+                CREATE TABLE IF NOT EXISTS learning_profile_entries (
+                    id TEXT PRIMARY KEY,
+                    profile_id TEXT NOT NULL REFERENCES learning_profiles(id) ON DELETE CASCADE,
+                    recommendation_id TEXT NOT NULL UNIQUE
+                        REFERENCES optimization_recommendations(id) ON DELETE CASCADE,
+                    platform TEXT NOT NULL,
+                    topic_category TEXT NOT NULL,
+                    objective TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    parameters TEXT NOT NULL,
+                    evidence_strength TEXT NOT NULL,
+                    accepted_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    active INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS learning_events (
+                    id TEXT PRIMARY KEY,
+                    event TEXT NOT NULL,
+                    entity_type TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    event_metadata TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_job_steps_job_id
                     ON job_steps(job_id, sequence);
 
@@ -348,7 +476,27 @@ class SQLiteContentJobRepository:
                 CREATE INDEX IF NOT EXISTS idx_metric_snapshots_collected
                     ON metric_snapshots(collected_at);
 
-                PRAGMA user_version = 5;
+                CREATE INDEX IF NOT EXISTS idx_learning_context_scope
+                    ON job_learning_contexts(workspace_id, mode, topic_category, objective);
+
+                CREATE INDEX IF NOT EXISTS idx_learning_runs_scope
+                    ON learning_analysis_runs(workspace_id, mode, started_at);
+
+                CREATE INDEX IF NOT EXISTS idx_learning_observations_scope
+                    ON performance_observations(workspace_id, platform, metric_key, created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_learning_recommendations_status
+                    ON optimization_recommendations(workspace_id, status, created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_learning_entries_scope
+                    ON learning_profile_entries(
+                        profile_id, platform, topic_category, objective, active
+                    );
+
+                CREATE INDEX IF NOT EXISTS idx_learning_events_created
+                    ON learning_events(created_at, event);
+
+                PRAGMA user_version = 6;
                 """
             )
 
@@ -1212,6 +1360,370 @@ class SQLiteContentJobRepository:
             )
             return cursor.rowcount
 
+    def save_job_learning_context(self, context: JobLearningContext) -> None:
+        self.get(context.job_id)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO job_learning_contexts (
+                    job_id, workspace_id, topic_category, objective, use_learning,
+                    mode, explicit_constraints, applied_profile_entry_ids,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_id) DO UPDATE SET
+                    workspace_id = excluded.workspace_id,
+                    topic_category = excluded.topic_category,
+                    objective = excluded.objective,
+                    use_learning = excluded.use_learning,
+                    mode = excluded.mode,
+                    explicit_constraints = excluded.explicit_constraints,
+                    applied_profile_entry_ids = excluded.applied_profile_entry_ids,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    context.job_id,
+                    context.workspace_id,
+                    context.topic_category,
+                    context.objective,
+                    int(context.use_learning),
+                    context.mode.value,
+                    json.dumps(dict(context.explicit_constraints), sort_keys=True),
+                    json.dumps(context.applied_profile_entry_ids),
+                    context.created_at.isoformat(),
+                    context.updated_at.isoformat(),
+                ),
+            )
+
+    def get_job_learning_context(self, job_id: str) -> JobLearningContext | None:
+        self.get(job_id)
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM job_learning_contexts WHERE job_id = ?", (job_id,)
+            ).fetchone()
+        return None if row is None else self._row_to_job_learning_context(row)
+
+    def add_learning_run(self, run: LearningAnalysisRun) -> LearningAnalysisRun:
+        existing = self.get_learning_run_by_idempotency_key(run.idempotency_key)
+        if existing is not None:
+            return existing
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO learning_analysis_runs (
+                        id, idempotency_key, workspace_id, mode, cohort_a, cohort_b,
+                        algorithm_version, minimum_sample_size, started_at, completed_at,
+                        status, sample_count_a, sample_count_b, failure_classification
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run.id,
+                        run.idempotency_key,
+                        run.workspace_id,
+                        run.mode.value,
+                        self._cohort_to_json(run.cohort_a),
+                        self._cohort_to_json(run.cohort_b),
+                        run.algorithm_version,
+                        run.minimum_sample_size,
+                        run.started_at.isoformat(),
+                        run.completed_at.isoformat() if run.completed_at else None,
+                        run.status.value,
+                        run.sample_count_a,
+                        run.sample_count_b,
+                        run.failure_classification,
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            existing = self.get_learning_run_by_idempotency_key(run.idempotency_key)
+            if existing is not None:
+                return existing
+            raise DuplicateArtifactError(f"learning run already exists: {run.id}") from exc
+        return run
+
+    def get_learning_run_by_idempotency_key(
+        self, idempotency_key: str
+    ) -> LearningAnalysisRun | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM learning_analysis_runs WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+        return None if row is None else self._row_to_learning_run(row)
+
+    def list_learning_runs(self) -> tuple[LearningAnalysisRun, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM learning_analysis_runs ORDER BY started_at, id"
+            ).fetchall()
+        return tuple(self._row_to_learning_run(row) for row in rows)
+
+    def add_performance_observation(
+        self, observation: PerformanceObservation
+    ) -> PerformanceObservation:
+        existing = self.get_observation_for_run(observation.analysis_run_id)
+        if existing is not None:
+            return existing
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO performance_observations (
+                        id, analysis_run_id, workspace_id, mode, platform, metric_key,
+                        window_hours, cohort_a_format, cohort_b_format, sample_count_a,
+                        sample_count_b, median_a, median_b, mean_a, mean_b,
+                        relative_difference_percent, evidence_strength, evidence_breakdown,
+                        publication_ids, receipt_ids, snapshot_ids, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    self._observation_values(observation),
+                )
+        except sqlite3.IntegrityError as exc:
+            existing = self.get_observation_for_run(observation.analysis_run_id)
+            if existing is not None:
+                return existing
+            raise DuplicateArtifactError(f"observation already exists: {observation.id}") from exc
+        return observation
+
+    def get_observation_for_run(self, run_id: str) -> PerformanceObservation | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM performance_observations WHERE analysis_run_id = ?",
+                (run_id,),
+            ).fetchone()
+        return None if row is None else self._row_to_performance_observation(row)
+
+    def list_performance_observations(self) -> tuple[PerformanceObservation, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM performance_observations ORDER BY created_at DESC, id DESC"
+            ).fetchall()
+        return tuple(self._row_to_performance_observation(row) for row in rows)
+
+    def add_optimization_recommendation(
+        self, recommendation: OptimizationRecommendation
+    ) -> OptimizationRecommendation:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM optimization_recommendations WHERE observation_id = ?",
+                (recommendation.observation_id,),
+            ).fetchone()
+        if row is not None:
+            return self._row_to_optimization_recommendation(row)
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO optimization_recommendations (
+                        id, observation_id, workspace_id, mode, platform, topic_category,
+                        objective, kind, parameters, rationale, evidence_strength, status,
+                        created_at, expires_at, decided_at, decided_by, decision_reason,
+                        potentially_outdated
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    self._recommendation_values(recommendation),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateArtifactError(
+                f"recommendation already exists: {recommendation.id}"
+            ) from exc
+        return recommendation
+
+    def save_optimization_recommendation(self, recommendation: OptimizationRecommendation) -> None:
+        values = self._recommendation_values(recommendation)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE optimization_recommendations SET
+                    observation_id = ?, workspace_id = ?, mode = ?, platform = ?,
+                    topic_category = ?, objective = ?, kind = ?, parameters = ?,
+                    rationale = ?, evidence_strength = ?, status = ?, created_at = ?,
+                    expires_at = ?, decided_at = ?, decided_by = ?, decision_reason = ?,
+                    potentially_outdated = ?
+                WHERE id = ?
+                """,
+                (*values[1:], recommendation.id),
+            )
+            if cursor.rowcount != 1:
+                raise ArtifactNotFoundError(f"recommendation not found: {recommendation.id}")
+
+    def get_optimization_recommendation(self, recommendation_id: str) -> OptimizationRecommendation:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM optimization_recommendations WHERE id = ?",
+                (recommendation_id,),
+            ).fetchone()
+        if row is None:
+            raise ArtifactNotFoundError(f"recommendation not found: {recommendation_id}")
+        return self._row_to_optimization_recommendation(row)
+
+    def get_recommendation_for_run(self, run_id: str) -> OptimizationRecommendation | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT r.* FROM optimization_recommendations r
+                JOIN performance_observations o ON o.id = r.observation_id
+                WHERE o.analysis_run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+        return None if row is None else self._row_to_optimization_recommendation(row)
+
+    def list_optimization_recommendations(
+        self,
+        *,
+        workspace_id: str | None = None,
+        status: RecommendationStatus | None = None,
+    ) -> tuple[OptimizationRecommendation, ...]:
+        clauses = []
+        values = []
+        if workspace_id is not None:
+            clauses.append("workspace_id = ?")
+            values.append(workspace_id)
+        if status is not None:
+            clauses.append("status = ?")
+            values.append(status.value)
+        query = "SELECT * FROM optimization_recommendations"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY created_at DESC, id DESC"
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(values)).fetchall()
+        return tuple(self._row_to_optimization_recommendation(row) for row in rows)
+
+    def add_learning_profile(self, profile: LearningProfile) -> LearningProfile:
+        existing = self.get_learning_profile(profile.workspace_id, profile.mode)
+        if existing is not None:
+            return existing
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO learning_profiles (
+                        id, workspace_id, mode, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        profile.id,
+                        profile.workspace_id,
+                        profile.mode.value,
+                        profile.created_at.isoformat(),
+                        profile.updated_at.isoformat(),
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            existing = self.get_learning_profile(profile.workspace_id, profile.mode)
+            if existing is not None:
+                return existing
+            raise DuplicateArtifactError(f"learning profile already exists: {profile.id}") from exc
+        return profile
+
+    def get_learning_profile(self, workspace_id: str, mode: LearningMode) -> LearningProfile | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM learning_profiles WHERE workspace_id = ? AND mode = ?",
+                (workspace_id, mode.value),
+            ).fetchone()
+        return None if row is None else self._row_to_learning_profile(row)
+
+    def add_learning_profile_entry(self, entry: LearningProfileEntry) -> LearningProfileEntry:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM learning_profile_entries WHERE recommendation_id = ?",
+                (entry.recommendation_id,),
+            ).fetchone()
+        if row is not None:
+            return self._row_to_learning_profile_entry(row)
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO learning_profile_entries (
+                        id, profile_id, recommendation_id, platform, topic_category,
+                        objective, kind, parameters, evidence_strength, accepted_at,
+                        expires_at, active
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    self._profile_entry_values(entry),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateArtifactError(
+                f"learning profile entry already exists: {entry.id}"
+            ) from exc
+        return entry
+
+    def save_learning_profile_entry(self, entry: LearningProfileEntry) -> None:
+        values = self._profile_entry_values(entry)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE learning_profile_entries SET
+                    profile_id = ?, recommendation_id = ?, platform = ?, topic_category = ?,
+                    objective = ?, kind = ?, parameters = ?, evidence_strength = ?,
+                    accepted_at = ?, expires_at = ?, active = ?
+                WHERE id = ?
+                """,
+                (*values[1:], entry.id),
+            )
+            if cursor.rowcount != 1:
+                raise ArtifactNotFoundError(f"learning profile entry not found: {entry.id}")
+
+    def list_learning_profile_entries(
+        self,
+        *,
+        workspace_id: str | None = None,
+        recommendation_id: str | None = None,
+        active_only: bool = False,
+    ) -> tuple[LearningProfileEntry, ...]:
+        clauses = []
+        values = []
+        if workspace_id is not None:
+            clauses.append("p.workspace_id = ?")
+            values.append(workspace_id)
+        if recommendation_id is not None:
+            clauses.append("e.recommendation_id = ?")
+            values.append(recommendation_id)
+        if active_only:
+            clauses.append("e.active = 1")
+        query = (
+            "SELECT e.* FROM learning_profile_entries e "
+            "JOIN learning_profiles p ON p.id = e.profile_id"
+        )
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY e.accepted_at DESC, e.id DESC"
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(values)).fetchall()
+        return tuple(self._row_to_learning_profile_entry(row) for row in rows)
+
+    def add_learning_event(self, event: LearningAuditEvent) -> None:
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO learning_events (
+                        id, event, entity_type, entity_id, actor, event_metadata, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.id,
+                        event.event,
+                        event.entity_type,
+                        event.entity_id,
+                        event.actor,
+                        json.dumps(dict(event.metadata), sort_keys=True),
+                        event.created_at.isoformat(),
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateArtifactError(f"learning event already exists: {event.id}") from exc
+
+    def list_learning_events(self) -> tuple[LearningAuditEvent, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM learning_events ORDER BY created_at, id"
+            ).fetchall()
+        return tuple(self._row_to_learning_event(row) for row in rows)
+
     @staticmethod
     def _update_job(connection: sqlite3.Connection, job: ContentJob, step: JobStep) -> None:
         if step.job_id != job.id or step.sequence != job.version:
@@ -1350,6 +1862,94 @@ class SQLiteContentJobRepository:
             run.metrics_collected_count,
             json.dumps(run.unavailable_metric_keys),
             run.retry_count,
+        )
+
+    @staticmethod
+    def _cohort_to_json(cohort: CohortDefinition) -> str:
+        return json.dumps(
+            {
+                "platform": cohort.platform,
+                "format": cohort.format,
+                "topic_category": cohort.topic_category,
+                "objective": cohort.objective,
+                "metric_key": cohort.metric_key,
+                "window_hours": cohort.window_hours,
+            },
+            sort_keys=True,
+        )
+
+    @staticmethod
+    def _cohort_from_json(raw: str) -> CohortDefinition:
+        data = json.loads(raw)
+        return CohortDefinition(**data)
+
+    @staticmethod
+    def _observation_values(observation: PerformanceObservation) -> tuple[object, ...]:
+        return (
+            observation.id,
+            observation.analysis_run_id,
+            observation.workspace_id,
+            observation.mode.value,
+            observation.platform,
+            observation.metric_key,
+            observation.window_hours,
+            observation.cohort_a_format,
+            observation.cohort_b_format,
+            observation.sample_count_a,
+            observation.sample_count_b,
+            str(observation.median_a),
+            str(observation.median_b),
+            str(observation.mean_a),
+            str(observation.mean_b),
+            str(observation.relative_difference_percent),
+            observation.evidence_strength.value,
+            json.dumps(dict(observation.evidence_breakdown), sort_keys=True),
+            json.dumps(observation.publication_ids),
+            json.dumps(observation.receipt_ids),
+            json.dumps(observation.snapshot_ids),
+            observation.created_at.isoformat(),
+        )
+
+    @staticmethod
+    def _recommendation_values(
+        recommendation: OptimizationRecommendation,
+    ) -> tuple[object, ...]:
+        return (
+            recommendation.id,
+            recommendation.observation_id,
+            recommendation.workspace_id,
+            recommendation.mode.value,
+            recommendation.platform,
+            recommendation.topic_category,
+            recommendation.objective,
+            recommendation.kind.value,
+            json.dumps(dict(recommendation.parameters), sort_keys=True),
+            recommendation.rationale,
+            recommendation.evidence_strength.value,
+            recommendation.status.value,
+            recommendation.created_at.isoformat(),
+            recommendation.expires_at.isoformat(),
+            recommendation.decided_at.isoformat() if recommendation.decided_at else None,
+            recommendation.decided_by,
+            recommendation.decision_reason,
+            int(recommendation.potentially_outdated),
+        )
+
+    @staticmethod
+    def _profile_entry_values(entry: LearningProfileEntry) -> tuple[object, ...]:
+        return (
+            entry.id,
+            entry.profile_id,
+            entry.recommendation_id,
+            entry.platform,
+            entry.topic_category,
+            entry.objective,
+            entry.kind.value,
+            json.dumps(dict(entry.parameters), sort_keys=True),
+            entry.evidence_strength.value,
+            entry.accepted_at.isoformat(),
+            entry.expires_at.isoformat(),
+            int(entry.active),
         )
 
     @staticmethod
@@ -1620,6 +2220,133 @@ class SQLiteContentJobRepository:
             source_version=row["source_version"],
             collected_at=datetime.fromisoformat(row["collected_at"]),
             metadata=MappingProxyType(json.loads(row["snapshot_metadata"])),
+        )
+
+    @staticmethod
+    def _row_to_job_learning_context(row: sqlite3.Row) -> JobLearningContext:
+        return JobLearningContext(
+            job_id=row["job_id"],
+            workspace_id=row["workspace_id"],
+            topic_category=row["topic_category"],
+            objective=row["objective"],
+            use_learning=bool(row["use_learning"]),
+            mode=LearningMode(row["mode"]),
+            explicit_constraints=MappingProxyType(json.loads(row["explicit_constraints"])),
+            applied_profile_entry_ids=tuple(json.loads(row["applied_profile_entry_ids"])),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    @classmethod
+    def _row_to_learning_run(cls, row: sqlite3.Row) -> LearningAnalysisRun:
+        return LearningAnalysisRun(
+            id=row["id"],
+            idempotency_key=row["idempotency_key"],
+            workspace_id=row["workspace_id"],
+            mode=LearningMode(row["mode"]),
+            cohort_a=cls._cohort_from_json(row["cohort_a"]),
+            cohort_b=cls._cohort_from_json(row["cohort_b"]),
+            algorithm_version=row["algorithm_version"],
+            minimum_sample_size=row["minimum_sample_size"],
+            started_at=datetime.fromisoformat(row["started_at"]),
+            completed_at=(
+                datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None
+            ),
+            status=LearningRunStatus(row["status"]),
+            sample_count_a=row["sample_count_a"],
+            sample_count_b=row["sample_count_b"],
+            failure_classification=row["failure_classification"],
+        )
+
+    @staticmethod
+    def _row_to_performance_observation(row: sqlite3.Row) -> PerformanceObservation:
+        return PerformanceObservation(
+            id=row["id"],
+            analysis_run_id=row["analysis_run_id"],
+            workspace_id=row["workspace_id"],
+            mode=LearningMode(row["mode"]),
+            platform=row["platform"],
+            metric_key=row["metric_key"],
+            window_hours=row["window_hours"],
+            cohort_a_format=row["cohort_a_format"],
+            cohort_b_format=row["cohort_b_format"],
+            sample_count_a=row["sample_count_a"],
+            sample_count_b=row["sample_count_b"],
+            median_a=Decimal(row["median_a"]),
+            median_b=Decimal(row["median_b"]),
+            mean_a=Decimal(row["mean_a"]),
+            mean_b=Decimal(row["mean_b"]),
+            relative_difference_percent=Decimal(row["relative_difference_percent"]),
+            evidence_strength=EvidenceStrength(row["evidence_strength"]),
+            evidence_breakdown=MappingProxyType(json.loads(row["evidence_breakdown"])),
+            publication_ids=tuple(json.loads(row["publication_ids"])),
+            receipt_ids=tuple(json.loads(row["receipt_ids"])),
+            snapshot_ids=tuple(json.loads(row["snapshot_ids"])),
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    @staticmethod
+    def _row_to_optimization_recommendation(
+        row: sqlite3.Row,
+    ) -> OptimizationRecommendation:
+        return OptimizationRecommendation(
+            id=row["id"],
+            observation_id=row["observation_id"],
+            workspace_id=row["workspace_id"],
+            mode=LearningMode(row["mode"]),
+            platform=row["platform"],
+            topic_category=row["topic_category"],
+            objective=row["objective"],
+            kind=RecommendationKind(row["kind"]),
+            parameters=MappingProxyType(json.loads(row["parameters"])),
+            rationale=row["rationale"],
+            evidence_strength=EvidenceStrength(row["evidence_strength"]),
+            status=RecommendationStatus(row["status"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            expires_at=datetime.fromisoformat(row["expires_at"]),
+            decided_at=(datetime.fromisoformat(row["decided_at"]) if row["decided_at"] else None),
+            decided_by=row["decided_by"],
+            decision_reason=row["decision_reason"],
+            potentially_outdated=bool(row["potentially_outdated"]),
+        )
+
+    @staticmethod
+    def _row_to_learning_profile(row: sqlite3.Row) -> LearningProfile:
+        return LearningProfile(
+            id=row["id"],
+            workspace_id=row["workspace_id"],
+            mode=LearningMode(row["mode"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _row_to_learning_profile_entry(row: sqlite3.Row) -> LearningProfileEntry:
+        return LearningProfileEntry(
+            id=row["id"],
+            profile_id=row["profile_id"],
+            recommendation_id=row["recommendation_id"],
+            platform=row["platform"],
+            topic_category=row["topic_category"],
+            objective=row["objective"],
+            kind=RecommendationKind(row["kind"]),
+            parameters=MappingProxyType(json.loads(row["parameters"])),
+            evidence_strength=EvidenceStrength(row["evidence_strength"]),
+            accepted_at=datetime.fromisoformat(row["accepted_at"]),
+            expires_at=datetime.fromisoformat(row["expires_at"]),
+            active=bool(row["active"]),
+        )
+
+    @staticmethod
+    def _row_to_learning_event(row: sqlite3.Row) -> LearningAuditEvent:
+        return LearningAuditEvent(
+            id=row["id"],
+            event=row["event"],
+            entity_type=row["entity_type"],
+            entity_id=row["entity_id"],
+            actor=row["actor"],
+            metadata=MappingProxyType(json.loads(row["event_metadata"])),
+            created_at=datetime.fromisoformat(row["created_at"]),
         )
 
     @staticmethod

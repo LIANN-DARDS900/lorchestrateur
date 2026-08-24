@@ -8,7 +8,8 @@ without moving business logic into HTTP controllers. A registry-based publicatio
 adds approved-only delivery, SQLite scheduling, receipts, and reconciliation without a distributed
 queue. The project still deliberately avoids AI framework/SDK coupling, an analytics framework, and
 a SPA build chain. A receipt-linked analytics boundary now adds governed observation, historical snapshots, and
-deterministic reporting without feeding metrics back into content generation.
+deterministic reporting. A separate governed learning boundary can now propose scoped guidance from
+comparable historical observations, but only human-accepted entries may reach a future strategy.
 
 ## Technology decision
 
@@ -41,6 +42,10 @@ workflow changes.
 8. **Analytics** — typed metric definitions and snapshots, a platform adapter registry, collection
    policy, deterministic summaries, and a local polling worker. Analytics depends on durable
    receipts and never imports or invokes content generation.
+9. **Learning** — deterministic cohort selection and statistics, immutable observations,
+   recommendation lifecycle, and scoped accepted profiles. It depends on analytics history and may
+   supply compact approved context through an injected application callback; it cannot change
+   workflow state or durable content.
 
 Dependencies point inward: adapters know core contracts; the domain does not know SQLite, provider
 SDKs, web frameworks, or social networks. Production adapters use an injected standard-library HTTP
@@ -72,7 +77,7 @@ quality threshold; valid variants are retained.
 
 ## Trace and persistence model
 
-The schema contains only the records required through Performance Intelligence V1:
+The schema contains only the records required through Governed Learning & Optimization V1:
 
 - `content_jobs` — current checkpoint, version, targets, repair count, and timestamps
 - `job_steps` — ordered transition/event trace with non-secret structured metadata
@@ -89,6 +94,12 @@ The schema contains only the records required through Performance Intelligence V
 - `metric_definitions` — versioned platform metric semantics, units, families, and aggregation rules
 - `analytics_collection_runs` — receipt-linked operational outcomes and sanitized failure classes
 - `metric_snapshots` — exact historical observations linked to receipt, job, content, and run
+- `job_learning_contexts` — explicit job scope, opt-in, data mode, constraints, and applied entry IDs
+- `learning_analysis_runs` — idempotent cohort comparison executions and sample sufficiency
+- `performance_observations` — median/mean results and exact publication/receipt/snapshot provenance
+- `optimization_recommendations` — cautious proposals and human-governed lifecycle metadata
+- `learning_profiles` / `learning_profile_entries` — scoped accepted guidance for future jobs
+- `learning_events` — non-secret learning decisions and operational audit events
 
 Artifact, state update, and step insertion are atomic. Prompts, excerpts, and generated content are
 not written into generic trace metadata. No generic AI-request table exists because generation
@@ -108,8 +119,10 @@ Near-term additions should preserve these boundaries:
    unsupported metrics unavailable rather than inventing values.
 3. Introduce authentication, migration tooling, PostgreSQL, and stronger worker coordination before
    any shared or hosted deployment.
-4. Design Phase 8 learning as a separate governed decision boundary; historical metrics must not
-   silently mutate strategy, prompts, generation, adaptation, or publication.
+4. Add authentication, migration review, and role separation before exposing recommendation
+   decisions in a shared deployment.
+5. Expand cohort definitions only when platform formats and metric semantics support defensible
+   comparisons; preserve explicit confounder and causality warnings.
 
 ## Product-owner decisions still needed
 

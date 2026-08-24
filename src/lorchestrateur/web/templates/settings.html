@@ -12,6 +12,9 @@
   <article class="panel setting-card"><span class="card-label">Mode Analytics</span><strong>{{ analytics_mode }}</strong><p>{{ analytics_policy }}. Aucun droit n’est déduit des identifiants de publication.</p></article>
   <article class="panel setting-card"><span class="card-label">Collecte périodique</span><strong>{{ analytics_poll_seconds }} secondes</strong><p>Le worker évalue les fenêtres configurées sans marteler les plateformes.</p></article>
   <article class="panel setting-card"><span class="card-label">Rétention Analytics</span><strong>{{ analytics_retention_days }} jours</strong><p>Les instantanés anciens sont supprimés selon une politique explicite.</p></article>
+  <article class="panel setting-card"><span class="card-label">Mode apprentissage</span><strong>{{ learning_mode }}</strong><p>{{ learning_policy }}. Les jeux de démonstration et réels restent isolés.</p></article>
+  <article class="panel setting-card"><span class="card-label">Application des profils</span><strong>{{ 'Autorisée après acceptation' if learning_apply_enabled else 'Désactivée' }}</strong><p>Aucune observation ne modifie directement une génération.</p></article>
+  <article class="panel setting-card"><span class="card-label">Échantillon minimum</span><strong>{{ learning_min_sample_size }} par cohorte</strong><p>En dessous de ce seuil, aucune recommandation n’est créée.</p></article>
 </section>
 <div class="notice"><strong>Identifiants gérés par l’environnement</strong><span>Les clés IA, jetons de publication et permissions Analytics ne sont jamais saisis ni affichés dans cette interface.</span></div>
 {% endblock %}

@@ -17,6 +17,17 @@
 
   <div class="form-section section-spaced">
     <span class="step-number" aria-hidden="true">02</span>
+    <div><h2>Périmètre d’apprentissage</h2><p>Ces attributs explicites permettent des comparaisons futures sans deviner le sujet ni l’objectif.</p></div>
+  </div>
+  <div class="form-grid learning-scope-fields">
+    <div><label for="topic-category">Catégorie du sujet <span aria-hidden="true">*</span></label><input id="topic-category" name="topic_category" required minlength="2" value="{{ form.topic_category }}" placeholder="Ex. opérations IT"></div>
+    <div><label for="objective">Objectif <span aria-hidden="true">*</span></label><input id="objective" name="objective" required minlength="2" value="{{ form.objective }}" placeholder="Ex. notoriété"></div>
+    <div class="full"><label for="x-format">Contrainte de format X</label><select id="x-format" name="x_format"><option value="auto" {{ 'selected' if form.x_format == 'auto' }}>Automatique</option><option value="single_post" {{ 'selected' if form.x_format == 'single_post' }}>Publication unique</option><option value="thread" {{ 'selected' if form.x_format == 'thread' }}>Fil</option></select><p class="field-help">Une contrainte explicite prévaut toujours sur une recommandation acceptée.</p></div>
+  </div>
+  <label class="review-check learning-opt-in"><input type="checkbox" name="use_learning" value="yes" {{ 'checked' if form.use_learning }} {{ 'disabled' if not learning_enabled }}><span><strong>Utiliser les recommandations humaines approuvées</strong><small>{% if learning_enabled %}Uniquement celles du même périmètre et du même mode de données.{% else %}L’apprentissage est désactivé par la politique de l’application.{% endif %}</small></span></label>
+
+  <div class="form-section section-spaced">
+    <span class="step-number" aria-hidden="true">03</span>
     <div><h2>Canaux cibles</h2><p>Chaque canal recevra une adaptation structurée et validée séparément.</p></div>
   </div>
   <fieldset>

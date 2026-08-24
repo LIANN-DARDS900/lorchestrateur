@@ -11,12 +11,18 @@ from typing import Any
 from lorchestrateur.analytics.metrics import FAMILY_LABELS
 from lorchestrateur.analytics.service import AnalyticsService
 from lorchestrateur.domain.analytics import AnalyticsRunOutcome
+from lorchestrateur.domain.learning import (
+    LearningRunStatus,
+    RecommendationStatus,
+)
 from lorchestrateur.domain.platform_content import PlatformContentRecord
 from lorchestrateur.domain.workflow import ContentJob, ContentJobState
+from lorchestrateur.learning.service import LearningService
 from lorchestrateur.persistence.contracts import (
     AnalyticsRepository,
     ArtifactNotFoundError,
     ContentIntelligenceRepository,
+    LearningRepository,
 )
 from lorchestrateur.platforms.blog import BlogContentV1
 from lorchestrateur.platforms.facebook import FacebookContentV1
@@ -102,6 +108,7 @@ def present_job(job: ContentJob) -> dict[str, Any]:
 def dashboard_view(
     repository: ContentIntelligenceRepository,
     analytics_service: AnalyticsService | None = None,
+    learning_service: LearningService | None = None,
 ) -> dict[str, Any]:
     jobs = repository.list_jobs()
     counts = Counter(job.state for job in jobs)
@@ -166,6 +173,91 @@ def dashboard_view(
             else None,
             "recent": analytics_jobs[:3],
         },
+        "learning": {
+            "enabled": bool(learning_service and learning_service.policy.enabled),
+            "mode": (
+                learning_service.policy.mode.value if learning_service is not None else "demo"
+            ),
+            "observations": len(repository.list_performance_observations())
+            if hasattr(repository, "list_performance_observations")
+            else 0,
+            "proposed": sum(
+                item.status is RecommendationStatus.PROPOSED
+                for item in repository.list_optimization_recommendations()
+            )
+            if hasattr(repository, "list_optimization_recommendations")
+            else 0,
+            "active": len(repository.list_learning_profile_entries(active_only=True))
+            if hasattr(repository, "list_learning_profile_entries")
+            else 0,
+        },
+    }
+
+
+def learning_overview_view(
+    repository: LearningRepository,
+    service: LearningService,
+    *,
+    workspace_id: str,
+) -> dict[str, Any]:
+    observations = repository.list_performance_observations()
+    recommendations = repository.list_optimization_recommendations(workspace_id=workspace_id)
+    observation_by_id = {item.id: item for item in observations}
+    entries = repository.list_learning_profile_entries(workspace_id=workspace_id)
+    runs = repository.list_learning_runs()
+    return {
+        "enabled": service.policy.enabled,
+        "apply_enabled": service.policy.apply_accepted_learning,
+        "mode": service.policy.mode.value,
+        "mode_label": (
+            "Données de démonstration" if service.policy.mode.value == "demo" else "Données réelles"
+        ),
+        "minimum_sample_size": service.policy.minimum_sample_size,
+        "minimum_effect_percent": service.policy.minimum_effect_percent,
+        "recommendations": [
+            _present_learning_recommendation(item, observation_by_id.get(item.observation_id))
+            for item in recommendations
+        ],
+        "observations": [_present_observation(item) for item in observations],
+        "active_entries": [
+            {
+                "id": item.id,
+                "platform": PLATFORM_LABELS.get(item.platform, item.platform.title()),
+                "topic": item.topic_category,
+                "objective": item.objective,
+                "kind": _recommendation_kind_label(item.kind.value),
+                "parameters": dict(item.parameters),
+                "strength": _evidence_strength_label(item.evidence_strength.value),
+                "expires_at": _format_datetime(item.expires_at),
+                "active": item.active,
+            }
+            for item in entries
+            if item.active
+        ],
+        "insufficient_runs": [
+            {
+                "platform": PLATFORM_LABELS.get(
+                    item.cohort_a.platform, item.cohort_a.platform.title()
+                ),
+                "topic": item.cohort_a.topic_category,
+                "objective": item.cohort_a.objective,
+                "window": item.cohort_a.window_hours,
+                "count_a": item.sample_count_a,
+                "count_b": item.sample_count_b,
+                "minimum": item.minimum_sample_size,
+                "created_at": _format_datetime(item.started_at),
+            }
+            for item in reversed(runs)
+            if item.status is LearningRunStatus.INSUFFICIENT_DATA
+        ],
+        "events": [
+            {
+                "event": _learning_event_label(item.event),
+                "actor": item.actor,
+                "created_at": _format_datetime(item.created_at),
+            }
+            for item in reversed(repository.list_learning_events())
+        ][:12],
     }
 
 
@@ -181,8 +273,7 @@ def analytics_overview_view(
                 "job": present_job(job),
                 "platforms": [_present_platform_performance(item) for item in platforms],
                 "has_data": any(
-                    any(metric.value is not None for metric in item.metrics)
-                    for item in platforms
+                    any(metric.value is not None for metric in item.metrics) for item in platforms
                 ),
             }
         )
@@ -357,6 +448,11 @@ def workspace_view(
     }
     history = repository.list_steps(job.id)
     job_view = present_job(job)
+    learning_context = (
+        repository.get_job_learning_context(job.id)
+        if hasattr(repository, "get_job_learning_context")
+        else None
+    )
     return {
         "job": job_view,
         "sources": [
@@ -419,6 +515,17 @@ def workspace_view(
             }
             for step in reversed(history)
         ],
+        "learning": None
+        if learning_context is None
+        else {
+            "topic": learning_context.topic_category,
+            "objective": learning_context.objective,
+            "enabled_for_job": learning_context.use_learning,
+            "mode": learning_context.mode.value,
+            "constraints": dict(learning_context.explicit_constraints),
+            "applied_count": len(learning_context.applied_profile_entry_ids),
+            "applied_entry_ids": learning_context.applied_profile_entry_ids,
+        },
     }
 
 
@@ -510,6 +617,91 @@ def present_platform_content(
     else:
         raise TypeError(f"unsupported platform payload: {type(payload).__name__}")
     return common
+
+
+def _present_observation(observation) -> dict[str, Any]:
+    return {
+        "id": observation.id,
+        "platform": PLATFORM_LABELS.get(observation.platform, observation.platform.title()),
+        "metric": observation.metric_key,
+        "window": observation.window_hours,
+        "format_a": observation.cohort_a_format,
+        "format_b": observation.cohort_b_format,
+        "sample_a": observation.sample_count_a,
+        "sample_b": observation.sample_count_b,
+        "median_a": _format_decimal(observation.median_a),
+        "median_b": _format_decimal(observation.median_b),
+        "mean_a": _format_decimal(observation.mean_a),
+        "mean_b": _format_decimal(observation.mean_b),
+        "difference": _format_decimal(observation.relative_difference_percent),
+        "strength": _evidence_strength_label(observation.evidence_strength.value),
+        "strength_key": observation.evidence_strength.value,
+        "breakdown": dict(observation.evidence_breakdown),
+        "publication_count": len(observation.publication_ids),
+        "snapshot_count": len(observation.snapshot_ids),
+        "created_at": _format_datetime(observation.created_at),
+        "demo": observation.mode.value == "demo",
+    }
+
+
+def _present_learning_recommendation(recommendation, observation) -> dict[str, Any]:
+    return {
+        "id": recommendation.id,
+        "platform": PLATFORM_LABELS.get(recommendation.platform, recommendation.platform.title()),
+        "topic": recommendation.topic_category,
+        "objective": recommendation.objective,
+        "kind": _recommendation_kind_label(recommendation.kind.value),
+        "parameters": dict(recommendation.parameters),
+        "rationale": recommendation.rationale,
+        "strength": _evidence_strength_label(recommendation.evidence_strength.value),
+        "status": recommendation.status.value,
+        "status_label": {
+            "proposed": "À décider",
+            "accepted": "Acceptée",
+            "rejected": "Refusée",
+            "expired": "Expirée",
+            "superseded": "Remplacée",
+        }[recommendation.status.value],
+        "created_at": _format_datetime(recommendation.created_at),
+        "expires_at": _format_datetime(recommendation.expires_at),
+        "decided_by": recommendation.decided_by,
+        "potentially_outdated": recommendation.potentially_outdated,
+        "observation": _present_observation(observation) if observation else None,
+        "demo": recommendation.mode.value == "demo",
+    }
+
+
+def _recommendation_kind_label(value: str) -> str:
+    return {
+        "test_format": "Tester un format",
+        "preserve_current_approach": "Conserver l’approche",
+    }.get(value, value)
+
+
+def _evidence_strength_label(value: str) -> str:
+    return {
+        "insufficient": "Données insuffisantes",
+        "weak": "Faible",
+        "moderate": "Modérée",
+        "strong": "Forte",
+    }.get(value, value)
+
+
+def _learning_event_label(value: str) -> str:
+    return {
+        "learning_context_configured": "Périmètre d’apprentissage configuré",
+        "learning_analysis_completed": "Analyse de cohortes terminée",
+        "learning_recommendation_proposed": "Recommandation proposée",
+        "learning_recommendation_accepted": "Recommandation acceptée",
+        "learning_recommendation_rejected": "Recommandation refusée",
+        "learning_recommendation_expired": "Recommandation expirée",
+        "learning_profile_applied": "Profil approuvé appliqué au futur workflow",
+    }.get(value, value)
+
+
+def _format_decimal(value: Decimal) -> str:
+    normalized = value.quantize(Decimal("0.1"))
+    return f"{normalized:,.1f}".replace(",", " ").replace(".", ",")
 
 
 def _latest_platform_records(

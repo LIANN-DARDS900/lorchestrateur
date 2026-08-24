@@ -92,6 +92,7 @@ class ContentIntelligencePipeline:
         state_machine: StateMachine,
         *,
         ai_router: AIRouter | None,
+        learning_context_provider: Callable[[ContentJob], Mapping[str, Any]] | None = None,
         clock: Callable[[], datetime] = utc_now,
         id_factory: Callable[[], str] = lambda: str(uuid4()),
         timer: Callable[[], float] = perf_counter,
@@ -99,6 +100,7 @@ class ContentIntelligencePipeline:
         self._repository = repository
         self._state_machine = state_machine
         self._ai_router = ai_router
+        self._learning_context_provider = learning_context_provider
         self._clock = clock
         self._id_factory = id_factory
         self._timer = timer
@@ -168,9 +170,7 @@ class ContentIntelligencePipeline:
                 stage="research",
                 details={"issue_codes": self._issue_codes(validation)},
             )
-            return ResearchCompletionOutcome(
-                job=paused, validation=validation, paused=True
-            )
+            return ResearchCompletionOutcome(job=paused, validation=validation, paused=True)
 
         reviewed_count = sum(
             source.evidence_status is EvidenceStatus.REVIEWED for source in sources
@@ -186,15 +186,11 @@ class ContentIntelligencePipeline:
             },
         )
         self._repository.save(updated, step)
-        return ResearchCompletionOutcome(
-            job=updated, validation=validation, paused=False
-        )
+        return ResearchCompletionOutcome(job=updated, validation=validation, paused=False)
 
     def generate_content_strategy(self, job_id: str) -> StrategyGenerationOutcome:
         current = self._repository.get(job_id)
-        self._require_state(
-            current, ContentJobState.STRATEGIZING, "generate content strategy"
-        )
+        self._require_state(current, ContentJobState.STRATEGIZING, "generate content strategy")
         sources = self._repository.list_sources(job_id)
         research_validation = validate_research_sources(sources)
         if not research_validation.is_valid:
@@ -212,20 +208,28 @@ class ContentIntelligencePipeline:
             )
 
         reviewed_sources = tuple(
-            source
-            for source in sources
-            if source.evidence_status is EvidenceStatus.REVIEWED
+            source for source in sources if source.evidence_status is EvidenceStatus.REVIEWED
         )
+        learning_context = (
+            self._learning_context_provider(current)
+            if self._learning_context_provider is not None
+            else {}
+        )
+        request_context: dict[str, Any] = {
+            "idea": current.idea,
+            "sources": [self._source_ai_context(source) for source in reviewed_sources],
+        }
+        if learning_context:
+            request_context["approved_learning"] = dict(learning_context)
         request = AIRequest(
             task=AITask.CONTENT_STRATEGY,
             prompt=(
                 "Create a content strategy using only the supplied evidence. "
-                "Every key message must cite one or more supplied source IDs."
+                "Every key message must cite one or more supplied source IDs. "
+                "If approved learning is supplied, treat it as non-factual presentation "
+                "guidance; explicit user constraints always take precedence."
             ),
-            context={
-                "idea": current.idea,
-                "sources": [self._source_ai_context(source) for source in reviewed_sources],
-            },
+            context=request_context,
             max_output_characters=6_000,
             output_schema=AIOutputSchema.CONTENT_STRATEGY_V1,
         )
@@ -285,9 +289,7 @@ class ContentIntelligencePipeline:
 
     def generate_master_content(self, job_id: str) -> MasterContentGenerationOutcome:
         current = self._repository.get(job_id)
-        self._require_state(
-            current, ContentJobState.GENERATING_MASTER, "generate master content"
-        )
+        self._require_state(current, ContentJobState.GENERATING_MASTER, "generate master content")
         try:
             strategy = self._repository.get_strategy(job_id)
         except ArtifactNotFoundError:
@@ -325,9 +327,7 @@ class ContentIntelligencePipeline:
         assert response is not None
 
         try:
-            master_content = self._build_master_content(
-                current, request, response, duration_ms
-            )
+            master_content = self._build_master_content(current, request, response, duration_ms)
         except StructuredOutputError as exc:
             return self._invalid_master_outcome(current, exc.code)
         except ValueError:
@@ -360,9 +360,7 @@ class ContentIntelligencePipeline:
                 "duration_ms": duration_ms,
             },
         )
-        self._repository.save_master_content_with_checkpoint(
-            master_content, updated, step
-        )
+        self._repository.save_master_content_with_checkpoint(master_content, updated, step)
         return MasterContentGenerationOutcome(
             job=updated,
             master_content=master_content,
@@ -492,9 +490,7 @@ class ContentIntelligencePipeline:
         duration_ms = max(0, int((self._timer() - started_at) * 1_000))
         return response, duration_ms, None
 
-    def _fail_for_missing_strategy(
-        self, current: ContentJob
-    ) -> MasterContentGenerationOutcome:
+    def _fail_for_missing_strategy(self, current: ContentJob) -> MasterContentGenerationOutcome:
         validation = ValidationResult(
             (
                 ValidationIssue(
@@ -575,9 +571,7 @@ class ContentIntelligencePipeline:
         return ValidationResult((ValidationIssue(code=error_code, message=message),))
 
     @staticmethod
-    def _require_state(
-        job: ContentJob, expected: ContentJobState, action: str
-    ) -> None:
+    def _require_state(job: ContentJob, expected: ContentJobState, action: str) -> None:
         if job.state is not expected:
             raise ValueError(f"cannot {action} while job is in state {job.state}")
 

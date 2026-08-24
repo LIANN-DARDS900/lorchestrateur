@@ -370,6 +370,36 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); outline
 .collection-run-list dd { margin: 3px 0 0; font-size: 11px; font-weight: 750; overflow-wrap: anywhere; }
 .compact-date { font-family: inherit !important; font-size: 12px !important; }
 .setting-card { margin: 0; }
+.learning-opt-in { margin-top: 18px; }
+.learning-context-card { margin-bottom: 18px; border-left: 3px solid var(--accent); }
+.learning-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.learning-policy { border-top: 3px solid var(--ink); }
+.learning-analysis-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: end; }
+.learning-analysis-form label { display: block; margin-bottom: 5px; font-size: 11px; font-weight: 750; }
+.learning-analysis-form input, .learning-analysis-form select { width: 100%; min-height: 42px; padding: 9px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: white; }
+.learning-analysis-form .button { min-height: 42px; }
+.recommendation-list { display: grid; gap: 14px; }
+.recommendation-card { padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: white; }
+.recommendation-card h3 { margin: 18px 0 7px; font-size: 20px; }
+.recommendation-card > p { max-width: 850px; color: var(--muted); }
+.recommendation-head, .recommendation-head > div { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.recommendation-head small { color: var(--muted); }
+.recommendation-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 18px 0; }
+.recommendation-meta div { padding: 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); }
+.recommendation-meta dt { color: var(--muted); font-size: 10px; }
+.recommendation-meta dd { margin: 4px 0 0; font-size: 12px; font-weight: 750; overflow-wrap: anywhere; }
+.recommendation-card details { padding: 12px 0 0; border-top: 1px solid var(--line); }
+.recommendation-card summary { color: var(--accent-dark); cursor: pointer; font-size: 12px; font-weight: 750; }
+.cohort-comparison { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+.cohort-comparison > div { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); }
+.cohort-comparison span, .cohort-comparison strong, .cohort-comparison small { display: block; }
+.cohort-comparison span, .cohort-comparison small { color: var(--muted); font-size: 10px; }
+.cohort-comparison strong { margin: 4px 0; font-family: Georgia, serif; font-size: 24px; font-weight: 500; }
+.recommendation-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+.profile-entry-list { display: grid; gap: 8px; }
+.profile-entry-list > div { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.profile-entry-list strong, .profile-entry-list small { display: block; }
+.profile-entry-list small { margin-top: 3px; color: var(--muted); }
 .error-page { max-width: 600px; margin: 14vh auto 0; text-align: center; }
 .error-page > span { color: var(--accent); font-family: Georgia, serif; font-size: 46px; }
 .error-page h1 { margin: 4px 0; font-family: Georgia, serif; font-size: 36px; font-weight: 500; }
@@ -386,6 +416,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); outline
   .settings-grid { grid-template-columns: 1fr; }
   .compact-stats { grid-template-columns: repeat(3, 1fr); }
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .learning-analysis-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 760px) {
@@ -426,6 +457,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); outline
   .metric-grid { grid-template-columns: 1fr; }
   .trend-card { grid-template-columns: 1fr; }
   .collection-run-list dl { justify-content: space-between; }
+  .learning-analysis-form, .recommendation-meta, .cohort-comparison { grid-template-columns: 1fr; }
+  .learning-analysis-form .button { width: 100%; }
+  .recommendation-actions, .recommendation-actions form, .recommendation-actions .button { width: 100%; }
 }
 
 @media (max-width: 430px) {

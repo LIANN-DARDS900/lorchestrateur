@@ -11,6 +11,17 @@ from lorchestrateur.domain.analytics import (
     MetricSnapshot,
 )
 from lorchestrateur.domain.content import ContentStrategy, MasterContent, SourceEvidence
+from lorchestrateur.domain.learning import (
+    JobLearningContext,
+    LearningAnalysisRun,
+    LearningAuditEvent,
+    LearningMode,
+    LearningProfile,
+    LearningProfileEntry,
+    OptimizationRecommendation,
+    PerformanceObservation,
+    RecommendationStatus,
+)
 from lorchestrateur.domain.platform_content import PlatformContentRecord
 from lorchestrateur.domain.publication import (
     MediaAsset,
@@ -182,3 +193,68 @@ class AnalyticsRepository(PublicationRepository, Protocol):
     ) -> tuple[MetricSnapshot, ...]: ...
 
     def prune_metric_snapshots(self, *, collected_before: datetime) -> int: ...
+
+
+class LearningRepository(AnalyticsRepository, Protocol):
+    def save_job_learning_context(self, context: JobLearningContext) -> None: ...
+
+    def get_job_learning_context(self, job_id: str) -> JobLearningContext | None: ...
+
+    def add_learning_run(self, run: LearningAnalysisRun) -> LearningAnalysisRun: ...
+
+    def get_learning_run_by_idempotency_key(
+        self, idempotency_key: str
+    ) -> LearningAnalysisRun | None: ...
+
+    def list_learning_runs(self) -> tuple[LearningAnalysisRun, ...]: ...
+
+    def add_performance_observation(
+        self, observation: PerformanceObservation
+    ) -> PerformanceObservation: ...
+
+    def get_observation_for_run(self, run_id: str) -> PerformanceObservation | None: ...
+
+    def list_performance_observations(self) -> tuple[PerformanceObservation, ...]: ...
+
+    def add_optimization_recommendation(
+        self, recommendation: OptimizationRecommendation
+    ) -> OptimizationRecommendation: ...
+
+    def save_optimization_recommendation(
+        self, recommendation: OptimizationRecommendation
+    ) -> None: ...
+
+    def get_optimization_recommendation(
+        self, recommendation_id: str
+    ) -> OptimizationRecommendation: ...
+
+    def get_recommendation_for_run(self, run_id: str) -> OptimizationRecommendation | None: ...
+
+    def list_optimization_recommendations(
+        self,
+        *,
+        workspace_id: str | None = None,
+        status: RecommendationStatus | None = None,
+    ) -> tuple[OptimizationRecommendation, ...]: ...
+
+    def add_learning_profile(self, profile: LearningProfile) -> LearningProfile: ...
+
+    def get_learning_profile(
+        self, workspace_id: str, mode: LearningMode
+    ) -> LearningProfile | None: ...
+
+    def add_learning_profile_entry(self, entry: LearningProfileEntry) -> LearningProfileEntry: ...
+
+    def save_learning_profile_entry(self, entry: LearningProfileEntry) -> None: ...
+
+    def list_learning_profile_entries(
+        self,
+        *,
+        workspace_id: str | None = None,
+        recommendation_id: str | None = None,
+        active_only: bool = False,
+    ) -> tuple[LearningProfileEntry, ...]: ...
+
+    def add_learning_event(self, event: LearningAuditEvent) -> None: ...
+
+    def list_learning_events(self) -> tuple[LearningAuditEvent, ...]: ...

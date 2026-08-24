@@ -20,6 +20,7 @@ from lorchestrateur.web.presenters import (
     analytics_job_view,
     analytics_overview_view,
     dashboard_view,
+    learning_overview_view,
     present_job,
     publication_view,
     workspace_view,
@@ -51,12 +52,91 @@ def _analytics_service():
     return current_app.extensions["lorchestrateur_components"].analytics_service
 
 
+def _learning_service():
+    return current_app.extensions["lorchestrateur_components"].learning_service
+
+
 @bp.get("/")
 def dashboard():
     return render_template(
         "dashboard.html",
-        dashboard=dashboard_view(_repository(), _analytics_service()),
+        dashboard=dashboard_view(_repository(), _analytics_service(), _learning_service()),
     )
+
+
+@bp.get("/learning")
+def learning_overview():
+    _learning_service().expire_due()
+    return render_template(
+        "learning.html",
+        learning=learning_overview_view(
+            _repository(), _learning_service(), workspace_id=LOCAL_WORKSPACE_ID
+        ),
+    )
+
+
+@bp.post("/learning/analyze")
+def analyze_learning():
+    try:
+        window_hours = int(request.form.get("window_hours", ""))
+        outcome = _learning_service().analyze(
+            workspace_id=LOCAL_WORKSPACE_ID,
+            platform=request.form.get("platform", ""),
+            topic_category=request.form.get("topic_category", ""),
+            objective=request.form.get("objective", ""),
+            window_hours=window_hours,
+            actor=LOCAL_REVIEWER,
+        )
+    except (TypeError, ValueError):
+        return _action_error("L’analyse est indisponible ou son périmètre n’est pas valide.", 422)
+    if outcome.recommendation is None:
+        flash(
+            "Données insuffisantes : aucune recommandation n’a été créée.",
+            "warning",
+        )
+    else:
+        flash(
+            "Observation calculée. La recommandation attend une décision humaine.",
+            "success",
+        )
+    return redirect(url_for("web.learning_overview"))
+
+
+@bp.post("/learning/recommendations/<recommendation_id>/accept")
+def accept_learning_recommendation(recommendation_id: str):
+    recommendation = _repository().get_optimization_recommendation(recommendation_id)
+    if recommendation.workspace_id != LOCAL_WORKSPACE_ID:
+        return _action_error("Cette recommandation n’appartient pas à cet espace.", 404)
+    try:
+        _learning_service().accept(
+            recommendation_id,
+            decided_by=LOCAL_REVIEWER,
+            reason=request.form.get("reason", "").strip() or None,
+        )
+    except ValueError:
+        return _action_error("Cette recommandation ne peut plus être acceptée.", 409)
+    flash(
+        "Recommandation acceptée. Elle pourra guider les futurs workflows compatibles.",
+        "success",
+    )
+    return redirect(url_for("web.learning_overview"))
+
+
+@bp.post("/learning/recommendations/<recommendation_id>/reject")
+def reject_learning_recommendation(recommendation_id: str):
+    recommendation = _repository().get_optimization_recommendation(recommendation_id)
+    if recommendation.workspace_id != LOCAL_WORKSPACE_ID:
+        return _action_error("Cette recommandation n’appartient pas à cet espace.", 404)
+    try:
+        _learning_service().reject(
+            recommendation_id,
+            decided_by=LOCAL_REVIEWER,
+            reason=request.form.get("reason", "").strip() or None,
+        )
+    except ValueError:
+        return _action_error("Cette recommandation ne peut plus être refusée.", 409)
+    flash("Recommandation refusée. Aucun profil n’a été modifié.", "success")
+    return redirect(url_for("web.learning_overview"))
 
 
 @bp.get("/analytics")
@@ -133,6 +213,10 @@ def new_content():
     form = {
         "idea": request.form.get("idea", "").strip(),
         "platforms": request.form.getlist("platforms"),
+        "topic_category": request.form.get("topic_category", "général").strip(),
+        "objective": request.form.get("objective", "information").strip(),
+        "use_learning": request.form.get("use_learning") == "yes",
+        "x_format": request.form.get("x_format", "auto").strip(),
     }
     if request.method == "POST":
         if len(form["idea"]) < 10:
@@ -142,11 +226,25 @@ def new_content():
             errors.append("Un canal sélectionné n’est pas pris en charge.")
         if not form["platforms"]:
             errors.append("Sélectionnez au moins un canal.")
+        if len(form["topic_category"]) < 2:
+            errors.append("Précisez une catégorie de sujet explicite.")
+        if len(form["objective"]) < 2:
+            errors.append("Précisez l’objectif de ce contenu.")
+        if form["x_format"] not in {"auto", "single_post", "thread"}:
+            errors.append("La contrainte de format X n’est pas valide.")
         if not errors:
             job = _service().create_job(
                 workspace_id=LOCAL_WORKSPACE_ID,
                 idea=form["idea"],
                 target_platforms=tuple(form["platforms"]),
+            )
+            constraints = {"x_format": form["x_format"]} if "x" in form["platforms"] else {}
+            _learning_service().configure_job(
+                job,
+                topic_category=form["topic_category"],
+                objective=form["objective"],
+                use_learning=form["use_learning"],
+                explicit_constraints=constraints,
             )
             _service().begin_research(job.id)
             flash("Le workflow est prêt. Ajoutez maintenant les sources autorisées.", "success")
@@ -156,6 +254,7 @@ def new_content():
         errors=errors,
         form=form,
         platforms=PLATFORM_LABELS,
+        learning_enabled=_learning_service().policy.enabled,
     ), (422 if errors else 200)
 
 
@@ -474,6 +573,12 @@ def settings_page():
         ),
         analytics_poll_seconds=settings.analytics_poll_seconds,
         analytics_retention_days=settings.analytics_retention_days,
+        learning_mode=(
+            "Données de démonstration" if settings.learning_mode == "demo" else "Données réelles"
+        ),
+        learning_policy=("Analyse activée" if settings.learning_enabled else "Analyse désactivée"),
+        learning_apply_enabled=settings.learning_apply_enabled,
+        learning_min_sample_size=settings.learning_min_sample_size,
     )
 
 
