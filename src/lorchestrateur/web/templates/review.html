@@ -4,6 +4,7 @@
 <div class="page-heading"><p class="eyebrow">Gouvernance humaine</p><h1>Revue et approbation</h1><p>Examinez les contenus qui ont franchi les validations déterministes et le seuil qualité.</p></div>
 <section class="panel">
   {% if jobs %}
+    <div class="review-batch"><div><strong>{{ jobs|length }} contenu(s) entièrement prêt(s)</strong><small>L’action enregistre une décision humaine pour chaque workflow, sans publier.</small></div><form method="post" action="{{ url_for('web.approve_all_ready') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="button button-primary" type="submit">Approuver tout</button></form></div>
     <div class="job-list">{% for job in jobs %}<a class="job-row" href="{{ url_for('web.job_workspace', job_id=job.id) }}"><span class="job-main"><strong>{{ job.idea }}</strong><small>{{ job.platforms|join(' · ') }}</small></span><span class="status status-review">{{ job.status }}</span><span class="row-arrow">→</span></a>{% endfor %}</div>
   {% else %}
     <div class="empty-state"><span class="empty-symbol" aria-hidden="true">✓</span><h2>Aucune revue en attente</h2><p>Les contenus prêts à être approuvés apparaîtront ici.</p><a class="button button-secondary" href="{{ url_for('web.content_list') }}">Voir tous les contenus</a></div>

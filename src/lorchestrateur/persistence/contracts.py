@@ -30,6 +30,7 @@ from lorchestrateur.domain.publication import (
     PublicationRequest,
 )
 from lorchestrateur.domain.workflow import ContentJob, JobStep
+from lorchestrateur.domain.workspace import WorkspaceKnowledgeItem, WorkspaceProfile
 
 
 class JobNotFoundError(LookupError):
@@ -258,3 +259,31 @@ class LearningRepository(AnalyticsRepository, Protocol):
     def add_learning_event(self, event: LearningAuditEvent) -> None: ...
 
     def list_learning_events(self) -> tuple[LearningAuditEvent, ...]: ...
+
+
+class AutomationRepository(LearningRepository, Protocol):
+    """Persistence needed by the automation-first application layer."""
+
+    def add_workspace_profile(self, profile: WorkspaceProfile) -> WorkspaceProfile: ...
+
+    def save_workspace_profile(self, profile: WorkspaceProfile) -> None: ...
+
+    def get_workspace_profile(self, workspace_id: str) -> WorkspaceProfile: ...
+
+    def get_workspace_profile_by_slug(self, slug: str) -> WorkspaceProfile | None: ...
+
+    def list_workspace_profiles(self) -> tuple[WorkspaceProfile, ...]: ...
+
+    def add_workspace_knowledge(self, item: WorkspaceKnowledgeItem) -> WorkspaceKnowledgeItem: ...
+
+    def save_workspace_knowledge(self, item: WorkspaceKnowledgeItem) -> None: ...
+
+    def get_workspace_knowledge(self, item_id: str) -> WorkspaceKnowledgeItem: ...
+
+    def list_workspace_knowledge(
+        self,
+        workspace_id: str,
+        *,
+        reusable_only: bool = False,
+        active_only: bool = False,
+    ) -> tuple[WorkspaceKnowledgeItem, ...]: ...

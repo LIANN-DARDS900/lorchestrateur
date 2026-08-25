@@ -20,7 +20,6 @@ from lorchestrateur.domain.content_validation import (
     validate_strategy,
 )
 
-
 NOW = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
 
 

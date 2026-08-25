@@ -62,6 +62,7 @@ from lorchestrateur.domain.publication import (
 )
 from lorchestrateur.domain.validation import ValidationIssue
 from lorchestrateur.domain.workflow import ContentJob, ContentJobState, JobStep
+from lorchestrateur.domain.workspace import WorkspaceKnowledgeItem, WorkspaceProfile
 from lorchestrateur.persistence.contracts import (
     ArtifactNotFoundError,
     ConcurrentUpdateError,
@@ -443,6 +444,45 @@ class SQLiteContentJobRepository:
                     created_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS workspace_profiles (
+                    id TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL,
+                    slug TEXT NOT NULL UNIQUE,
+                    website_url TEXT,
+                    description TEXT,
+                    default_audience TEXT NOT NULL,
+                    default_objective TEXT NOT NULL,
+                    default_tone TEXT NOT NULL,
+                    default_cta TEXT,
+                    default_topic_category TEXT NOT NULL,
+                    default_platforms TEXT NOT NULL,
+                    business_constraints TEXT NOT NULL,
+                    forbidden_claims TEXT NOT NULL,
+                    uncertain_claims TEXT NOT NULL,
+                    reuse_approved_knowledge INTEGER NOT NULL,
+                    revision INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS workspace_knowledge_items (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL
+                        REFERENCES workspace_profiles(id) ON DELETE CASCADE,
+                    title TEXT NOT NULL,
+                    url TEXT,
+                    source_type TEXT NOT NULL,
+                    relevant_excerpt TEXT NOT NULL,
+                    evidence_status TEXT NOT NULL,
+                    reusable INTEGER NOT NULL,
+                    active INTEGER NOT NULL,
+                    origin_job_id TEXT,
+                    origin_source_id TEXT,
+                    revision INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_job_steps_job_id
                     ON job_steps(job_id, sequence);
 
@@ -496,7 +536,12 @@ class SQLiteContentJobRepository:
                 CREATE INDEX IF NOT EXISTS idx_learning_events_created
                     ON learning_events(created_at, event);
 
-                PRAGMA user_version = 6;
+                CREATE INDEX IF NOT EXISTS idx_workspace_knowledge_scope
+                    ON workspace_knowledge_items(
+                        workspace_id, evidence_status, reusable, active, updated_at
+                    );
+
+                PRAGMA user_version = 7;
                 """
             )
 
@@ -1724,6 +1769,148 @@ class SQLiteContentJobRepository:
             ).fetchall()
         return tuple(self._row_to_learning_event(row) for row in rows)
 
+    def add_workspace_profile(self, profile: WorkspaceProfile) -> WorkspaceProfile:
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO workspace_profiles (
+                        id, display_name, slug, website_url, description,
+                        default_audience, default_objective, default_tone, default_cta,
+                        default_topic_category, default_platforms, business_constraints,
+                        forbidden_claims, uncertain_claims, reuse_approved_knowledge,
+                        revision, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    self._workspace_profile_values(profile),
+                )
+        except sqlite3.IntegrityError as exc:
+            existing = self.get_workspace_profile_by_slug(profile.slug)
+            if existing is not None and existing.id == profile.id:
+                return existing
+            raise DuplicateArtifactError(f"workspace profile already exists: {profile.id}") from exc
+        return profile
+
+    def save_workspace_profile(self, profile: WorkspaceProfile) -> None:
+        values = self._workspace_profile_values(profile)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE workspace_profiles SET
+                    display_name = ?, slug = ?, website_url = ?, description = ?,
+                    default_audience = ?, default_objective = ?, default_tone = ?,
+                    default_cta = ?, default_topic_category = ?, default_platforms = ?,
+                    business_constraints = ?, forbidden_claims = ?, uncertain_claims = ?,
+                    reuse_approved_knowledge = ?, revision = ?, created_at = ?, updated_at = ?
+                WHERE id = ? AND revision = ?
+                """,
+                (*values[1:], profile.id, profile.revision - 1),
+            )
+            if cursor.rowcount != 1:
+                if connection.execute(
+                    "SELECT 1 FROM workspace_profiles WHERE id = ?", (profile.id,)
+                ).fetchone():
+                    raise ConcurrentUpdateError("workspace profile revision is stale")
+                raise ArtifactNotFoundError(f"workspace profile not found: {profile.id}")
+
+    def get_workspace_profile(self, workspace_id: str) -> WorkspaceProfile:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM workspace_profiles WHERE id = ?", (workspace_id,)
+            ).fetchone()
+        if row is None:
+            raise ArtifactNotFoundError(f"workspace profile not found: {workspace_id}")
+        return self._row_to_workspace_profile(row)
+
+    def get_workspace_profile_by_slug(self, slug: str) -> WorkspaceProfile | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM workspace_profiles WHERE slug = ?", (slug.strip().lower(),)
+            ).fetchone()
+        return None if row is None else self._row_to_workspace_profile(row)
+
+    def list_workspace_profiles(self) -> tuple[WorkspaceProfile, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM workspace_profiles ORDER BY display_name COLLATE NOCASE, id"
+            ).fetchall()
+        return tuple(self._row_to_workspace_profile(row) for row in rows)
+
+    def add_workspace_knowledge(self, item: WorkspaceKnowledgeItem) -> WorkspaceKnowledgeItem:
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO workspace_knowledge_items (
+                        id, workspace_id, title, url, source_type, relevant_excerpt,
+                        evidence_status, reusable, active, origin_job_id, origin_source_id,
+                        revision, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    self._workspace_knowledge_values(item),
+                )
+        except sqlite3.IntegrityError as exc:
+            try:
+                return self.get_workspace_knowledge(item.id)
+            except ArtifactNotFoundError:
+                raise DuplicateArtifactError(
+                    f"workspace knowledge already exists: {item.id}"
+                ) from exc
+        return item
+
+    def save_workspace_knowledge(self, item: WorkspaceKnowledgeItem) -> None:
+        values = self._workspace_knowledge_values(item)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE workspace_knowledge_items SET
+                    workspace_id = ?, title = ?, url = ?, source_type = ?,
+                    relevant_excerpt = ?, evidence_status = ?, reusable = ?, active = ?,
+                    origin_job_id = ?, origin_source_id = ?, revision = ?,
+                    created_at = ?, updated_at = ?
+                WHERE id = ? AND revision = ?
+                """,
+                (*values[1:], item.id, item.revision - 1),
+            )
+            if cursor.rowcount != 1:
+                if connection.execute(
+                    "SELECT 1 FROM workspace_knowledge_items WHERE id = ?", (item.id,)
+                ).fetchone():
+                    raise ConcurrentUpdateError("workspace knowledge revision is stale")
+                raise ArtifactNotFoundError(f"workspace knowledge not found: {item.id}")
+
+    def get_workspace_knowledge(self, item_id: str) -> WorkspaceKnowledgeItem:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM workspace_knowledge_items WHERE id = ?", (item_id,)
+            ).fetchone()
+        if row is None:
+            raise ArtifactNotFoundError(f"workspace knowledge not found: {item_id}")
+        return self._row_to_workspace_knowledge(row)
+
+    def list_workspace_knowledge(
+        self,
+        workspace_id: str,
+        *,
+        reusable_only: bool = False,
+        active_only: bool = False,
+    ) -> tuple[WorkspaceKnowledgeItem, ...]:
+        self.get_workspace_profile(workspace_id)
+        clauses = ["workspace_id = ?"]
+        values: list[object] = [workspace_id]
+        if reusable_only:
+            clauses.append("reusable = 1")
+        if active_only:
+            clauses.append("active = 1")
+        query = (
+            "SELECT * FROM workspace_knowledge_items WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY updated_at DESC, id DESC"
+        )
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(values)).fetchall()
+        return tuple(self._row_to_workspace_knowledge(row) for row in rows)
+
     @staticmethod
     def _update_job(connection: sqlite3.Connection, job: ContentJob, step: JobStep) -> None:
         if step.job_id != job.id or step.sequence != job.version:
@@ -1971,6 +2158,48 @@ class SQLiteContentJobRepository:
         )
 
     @staticmethod
+    def _workspace_profile_values(profile: WorkspaceProfile) -> tuple[object, ...]:
+        return (
+            profile.id,
+            profile.display_name,
+            profile.slug,
+            profile.website_url,
+            profile.description,
+            profile.default_audience,
+            profile.default_objective,
+            profile.default_tone,
+            profile.default_cta,
+            profile.default_topic_category,
+            json.dumps(profile.default_platforms),
+            json.dumps(profile.business_constraints),
+            json.dumps(profile.forbidden_claims),
+            json.dumps(profile.uncertain_claims),
+            int(profile.reuse_approved_knowledge),
+            profile.revision,
+            profile.created_at.isoformat(),
+            profile.updated_at.isoformat(),
+        )
+
+    @staticmethod
+    def _workspace_knowledge_values(item: WorkspaceKnowledgeItem) -> tuple[object, ...]:
+        return (
+            item.id,
+            item.workspace_id,
+            item.title,
+            item.url,
+            item.source_type.value,
+            item.relevant_excerpt,
+            item.evidence_status.value,
+            int(item.reusable),
+            int(item.active),
+            item.origin_job_id,
+            item.origin_source_id,
+            item.revision,
+            item.created_at.isoformat(),
+            item.updated_at.isoformat(),
+        )
+
+    @staticmethod
     def _job_values(job: ContentJob) -> tuple[object, ...]:
         return (
             job.id,
@@ -1998,6 +2227,48 @@ class SQLiteContentJobRepository:
             repair_attempts=row["repair_attempts"],
             paused_from=(ContentJobState(row["paused_from"]) if row["paused_from"] else None),
             status_message=row["status_message"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _row_to_workspace_profile(row: sqlite3.Row) -> WorkspaceProfile:
+        return WorkspaceProfile(
+            id=row["id"],
+            display_name=row["display_name"],
+            slug=row["slug"],
+            website_url=row["website_url"],
+            description=row["description"],
+            default_audience=row["default_audience"],
+            default_objective=row["default_objective"],
+            default_tone=row["default_tone"],
+            default_cta=row["default_cta"],
+            default_topic_category=row["default_topic_category"],
+            default_platforms=tuple(json.loads(row["default_platforms"])),
+            business_constraints=tuple(json.loads(row["business_constraints"])),
+            forbidden_claims=tuple(json.loads(row["forbidden_claims"])),
+            uncertain_claims=tuple(json.loads(row["uncertain_claims"])),
+            reuse_approved_knowledge=bool(row["reuse_approved_knowledge"]),
+            revision=row["revision"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _row_to_workspace_knowledge(row: sqlite3.Row) -> WorkspaceKnowledgeItem:
+        return WorkspaceKnowledgeItem(
+            id=row["id"],
+            workspace_id=row["workspace_id"],
+            title=row["title"],
+            url=row["url"],
+            source_type=SourceType(row["source_type"]),
+            relevant_excerpt=row["relevant_excerpt"],
+            evidence_status=EvidenceStatus(row["evidence_status"]),
+            reusable=bool(row["reusable"]),
+            active=bool(row["active"]),
+            origin_job_id=row["origin_job_id"],
+            origin_source_id=row["origin_source_id"],
+            revision=row["revision"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )

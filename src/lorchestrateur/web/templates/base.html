@@ -23,20 +23,36 @@
       {% if demo_mode %}
         <div class="demo-flag"><span aria-hidden="true">●</span> Mode démonstration</div>
       {% endif %}
+      <form class="project-switcher" method="post" action="{{ url_for('web.select_workspace') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
+        <label for="workspace-select">Projet actif</label>
+        <select id="workspace-select" name="workspace_id" onchange="this.form.submit()">
+          {% for profile in workspace_profiles %}<option value="{{ profile.id }}" {{ 'selected' if profile.id == current_workspace.id }}>{{ profile.display_name }}</option>{% endfor %}
+        </select>
+      </form>
       <nav class="nav-list">
-        <a href="{{ url_for('web.dashboard') }}" class="{{ 'active' if request.endpoint == 'web.dashboard' }}">Tableau de bord</a>
+        <a href="{{ url_for('web.dashboard') }}" class="{{ 'active' if request.endpoint == 'web.dashboard' }}">Accueil</a>
+        <a href="{{ url_for('web.new_content') }}" class="{{ 'active' if request.endpoint == 'web.new_content' }}">Créer</a>
         <a href="{{ url_for('web.content_list') }}" class="{{ 'active' if request.endpoint in ['web.content_list', 'web.job_workspace', 'web.publication_workspace'] }}">Contenus</a>
+        <a href="{{ url_for('web.publication_calendar') }}" class="{{ 'active' if request.endpoint == 'web.publication_calendar' }}">Calendrier</a>
         <a href="{{ url_for('web.analytics_overview') }}" class="{{ 'active' if request.endpoint in ['web.analytics_overview', 'web.job_analytics'] }}">Performance</a>
-        <a href="{{ url_for('web.learning_overview') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('web.learning') or request.endpoint in ['web.analyze_learning', 'web.accept_learning_recommendation', 'web.reject_learning_recommendation'] }}">Apprentissage</a>
-        <a href="{{ url_for('web.new_content') }}" class="{{ 'active' if request.endpoint == 'web.new_content' }}">Nouveau contenu</a>
-        <a href="{{ url_for('web.review_queue') }}" class="{{ 'active' if request.endpoint == 'web.review_queue' }}">Revue</a>
         <span class="nav-separator" aria-hidden="true"></span>
-        <a href="{{ url_for('web.providers') }}" class="{{ 'active' if request.endpoint == 'web.providers' }}">Fournisseurs IA</a>
         <a href="{{ url_for('web.settings_page') }}" class="{{ 'active' if request.endpoint == 'web.settings_page' }}">Paramètres</a>
+        {% if expert_mode %}
+          <a href="{{ url_for('web.review_queue') }}" class="{{ 'active' if request.endpoint == 'web.review_queue' }}">Revue</a>
+          <a href="{{ url_for('web.learning_overview') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('web.learning') or request.endpoint in ['web.analyze_learning', 'web.accept_learning_recommendation', 'web.reject_learning_recommendation'] }}">Apprentissage</a>
+          <a href="{{ url_for('web.providers') }}" class="{{ 'active' if request.endpoint == 'web.providers' }}">Fournisseurs IA</a>
+        {% endif %}
       </nav>
       <div class="sidebar-foot">
-        <span class="governance-dot" aria-hidden="true"></span>
-        <span>Gouvernance humaine active</span>
+        <form method="post" action="{{ url_for('web.toggle_expert_mode') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
+          <input type="hidden" name="enabled" value="{{ 'false' if expert_mode else 'true' }}">
+          <button class="mode-toggle" type="submit">{{ 'Mode essentiel' if expert_mode else 'Mode expert' }}</button>
+        </form>
+        <span><span class="governance-dot" aria-hidden="true"></span> Gouvernance humaine active</span>
       </div>
     </aside>
     <div class="page-column">

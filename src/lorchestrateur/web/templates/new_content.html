@@ -1,43 +1,30 @@
 {% extends "base.html" %}
-{% block title %}Nouveau contenu · L’Orchestrateur{% endblock %}
+{% block title %}Créer · L’Orchestrateur{% endblock %}
 {% block content %}
-<div class="page-heading narrow-heading"><p class="eyebrow">Nouveau workflow</p><h1>Créer un contenu</h1><p>Définissez l’idée stratégique et les canaux cibles. Les sources seront ajoutées avant toute génération.</p></div>
-{% if errors %}
-  <div class="error-summary" role="alert" aria-labelledby="form-errors"><h2 id="form-errors">Le formulaire doit être corrigé</h2><ul>{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul></div>
-{% endif %}
-<form class="form-card narrow-card" method="post" novalidate>
+<span class="sr-only">Créer un contenu</span>
+<div class="page-heading narrow-heading"><p class="eyebrow">{{ profile.display_name }}</p><h1>Nouveau contenu</h1><p>Une idée, les canaux souhaités, puis L’Orchestrateur prépare le workflow avec les règles approuvées du projet.</p></div>
+{% if errors %}<div class="error-summary" role="alert" aria-labelledby="form-errors"><h2 id="form-errors">Le formulaire doit être corrigé</h2><ul>{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul></div>{% endif %}
+<form class="form-card narrow-card automation-form" method="post" novalidate>
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <div class="form-section">
-    <span class="step-number" aria-hidden="true">01</span>
-    <div><h2>Idée stratégique</h2><p>Décrivez clairement le sujet, l’enjeu ou l’expertise à transformer.</p></div>
-  </div>
-  <label for="idea">Idée de contenu <span aria-hidden="true">*</span></label>
-  <textarea id="idea" name="idea" rows="6" required minlength="10" aria-describedby="idea-help">{{ form.idea }}</textarea>
-  <p id="idea-help" class="field-help">Le moteur construira ensuite la stratégie à partir des sources que vous autorisez.</p>
-
-  <div class="form-section section-spaced">
-    <span class="step-number" aria-hidden="true">02</span>
-    <div><h2>Périmètre d’apprentissage</h2><p>Ces attributs explicites permettent des comparaisons futures sans deviner le sujet ni l’objectif.</p></div>
-  </div>
-  <div class="form-grid learning-scope-fields">
-    <div><label for="topic-category">Catégorie du sujet <span aria-hidden="true">*</span></label><input id="topic-category" name="topic_category" required minlength="2" value="{{ form.topic_category }}" placeholder="Ex. opérations IT"></div>
-    <div><label for="objective">Objectif <span aria-hidden="true">*</span></label><input id="objective" name="objective" required minlength="2" value="{{ form.objective }}" placeholder="Ex. notoriété"></div>
-    <div class="full"><label for="x-format">Contrainte de format X</label><select id="x-format" name="x_format"><option value="auto" {{ 'selected' if form.x_format == 'auto' }}>Automatique</option><option value="single_post" {{ 'selected' if form.x_format == 'single_post' }}>Publication unique</option><option value="thread" {{ 'selected' if form.x_format == 'thread' }}>Fil</option></select><p class="field-help">Une contrainte explicite prévaut toujours sur une recommandation acceptée.</p></div>
-  </div>
-  <label class="review-check learning-opt-in"><input type="checkbox" name="use_learning" value="yes" {{ 'checked' if form.use_learning }} {{ 'disabled' if not learning_enabled }}><span><strong>Utiliser les recommandations humaines approuvées</strong><small>{% if learning_enabled %}Uniquement celles du même périmètre et du même mode de données.{% else %}L’apprentissage est désactivé par la politique de l’application.{% endif %}</small></span></label>
-
-  <div class="form-section section-spaced">
-    <span class="step-number" aria-hidden="true">03</span>
-    <div><h2>Canaux cibles</h2><p>Chaque canal recevra une adaptation structurée et validée séparément.</p></div>
-  </div>
-  <fieldset>
-    <legend>Sélectionnez au moins un canal <span aria-hidden="true">*</span></legend>
-    <div class="platform-picker">
-      {% for key, label in platforms.items() %}
-        <label class="platform-option"><input type="checkbox" name="platforms" value="{{ key }}" {{ 'checked' if key in form.platforms }}><span><strong>{{ label }}</strong><small>{% if key == 'blog' %}Article structuré et SEO sobre{% elif key == 'x' %}Publication courte ou fil{% elif key == 'instagram' %}Carrousel ou concept créatif{% else %}Publication contextuelle{% endif %}</small></span></label>
-      {% endfor %}
+  <label for="idea">Idée stratégique <span aria-hidden="true">*</span></label>
+  <textarea id="idea" name="idea" rows="6" required minlength="10" maxlength="5000" aria-describedby="idea-help">{{ form.idea }}</textarea>
+  <p id="idea-help" class="field-help">Le moteur utilisera uniquement les sources revues de ce projet et les contraintes autorisées.</p>
+  <fieldset class="section-spaced"><legend>Canaux cibles <span aria-hidden="true">*</span></legend><div class="platform-picker">{% for key, label in platforms.items() %}<label class="platform-option"><input type="checkbox" name="platforms" value="{{ key }}" {{ 'checked' if key in (form.platforms or profile.default_platforms) }}><span><strong>{{ label }}</strong><small>Adaptation structurée et validation dédiée</small></span></label>{% endfor %}</div></fieldset>
+  <details class="advanced-options" {% if errors and (form.objective or form.audience or form.tone or form.topic_category) %}open{% endif %}>
+    <summary>Options avancées</summary>
+    <p class="field-help">Laissez vide pour appliquer les préférences du projet. Toute valeur explicite est prioritaire.</p>
+    <div class="form-grid">
+      <div><label for="objective">Objectif</label><input id="objective" name="objective" maxlength="500" value="{{ form.objective }}" placeholder="{{ profile.default_objective }}"></div>
+      <div><label for="audience">Audience</label><input id="audience" name="audience" maxlength="500" value="{{ form.audience }}" placeholder="{{ profile.default_audience }}"></div>
+      <div><label for="tone">Ton</label><input id="tone" name="tone" maxlength="200" value="{{ form.tone }}" placeholder="{{ profile.default_tone }}"></div>
+      <div><label for="topic-category">Catégorie</label><input id="topic-category" name="topic_category" maxlength="120" value="{{ form.topic_category }}" placeholder="{{ profile.default_topic_category }}"></div>
+      <div class="full"><label for="cta">Appel à l’action</label><input id="cta" name="cta" maxlength="500" value="{{ form.cta }}" placeholder="{{ profile.default_cta or 'Aucun par défaut' }}"></div>
+      <div class="full"><label for="x-format">Format X</label><select id="x-format" name="x_format"><option value="auto" {{ 'selected' if form.x_format == 'auto' }}>Automatique</option><option value="single_post" {{ 'selected' if form.x_format == 'single_post' }}>Publication unique</option><option value="thread" {{ 'selected' if form.x_format == 'thread' }}>Fil</option></select></div>
     </div>
-  </fieldset>
-  <div class="form-actions"><a class="button button-secondary" href="{{ url_for('web.dashboard') }}">Annuler</a><button class="button button-primary" type="submit">Continuer vers les sources</button></div>
+    <input type="hidden" name="learning_override" value="present">
+    <label class="review-check learning-opt-in"><input type="checkbox" name="use_learning" value="yes" {{ 'checked' if form.use_learning is not sameas false }} {{ 'disabled' if not learning_enabled }}><span><strong>Utiliser les recommandations approuvées</strong><small>Les choix explicites et règles du projet restent prioritaires.</small></span></label>
+  </details>
+  <section class="preparation-summary" aria-labelledby="preparation-title"><div><strong id="preparation-title">Préparation automatique</strong><small>Ces valeurs viennent du projet, sans requête IA supplémentaire.</small></div><dl><div><dt>Objectif</dt><dd>{{ preparation.objective }}</dd></div><div><dt>Audience</dt><dd>{{ preparation.audience }}</dd></div><div><dt>Ton</dt><dd>{{ preparation.tone }}</dd></div><div><dt>Sources</dt><dd>{{ preparation.source_count }} approuvée(s) disponible(s)</dd></div><div><dt>Apprentissage</dt><dd>{{ preparation.learning }}</dd></div></dl></section>
+  <div class="form-actions"><a class="button button-secondary" href="{{ url_for('web.dashboard') }}">Annuler</a><button class="button button-primary" type="submit">Orchestrer</button></div>
 </form>
 {% endblock %}

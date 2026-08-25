@@ -32,6 +32,7 @@ from lorchestrateur.domain.publication import (
     PublicationStatus,
 )
 from lorchestrateur.domain.workflow import ContentJob, JobStep
+from lorchestrateur.domain.workspace import WorkspaceKnowledgeItem, WorkspaceProfile
 from lorchestrateur.persistence.contracts import (
     ArtifactNotFoundError,
     ConcurrentUpdateError,
@@ -63,6 +64,8 @@ class InMemoryContentJobRepository:
         self._learning_profiles: dict[str, LearningProfile] = {}
         self._learning_profile_entries: dict[str, LearningProfileEntry] = {}
         self._learning_events: dict[str, LearningAuditEvent] = {}
+        self._workspace_profiles: dict[str, WorkspaceProfile] = {}
+        self._workspace_knowledge: dict[str, WorkspaceKnowledgeItem] = {}
         self._lock = RLock()
 
     def add(self, job: ContentJob) -> None:
@@ -834,6 +837,105 @@ class InMemoryContentJobRepository:
                 sorted(
                     self._learning_events.values(),
                     key=lambda item: (item.created_at, item.id),
+                )
+            )
+
+    def add_workspace_profile(self, profile: WorkspaceProfile) -> WorkspaceProfile:
+        with self._lock:
+            existing = self._workspace_profiles.get(profile.id)
+            if existing is not None:
+                return existing
+            if any(item.slug == profile.slug for item in self._workspace_profiles.values()):
+                raise DuplicateArtifactError(f"workspace slug already exists: {profile.slug}")
+            self._workspace_profiles[profile.id] = profile
+            return profile
+
+    def save_workspace_profile(self, profile: WorkspaceProfile) -> None:
+        with self._lock:
+            existing = self._workspace_profiles.get(profile.id)
+            if existing is None:
+                raise ArtifactNotFoundError(f"workspace profile not found: {profile.id}")
+            if profile.revision != existing.revision + 1:
+                raise ConcurrentUpdateError("workspace profile revision is stale")
+            if any(
+                item.id != profile.id and item.slug == profile.slug
+                for item in self._workspace_profiles.values()
+            ):
+                raise DuplicateArtifactError(f"workspace slug already exists: {profile.slug}")
+            self._workspace_profiles[profile.id] = profile
+
+    def get_workspace_profile(self, workspace_id: str) -> WorkspaceProfile:
+        with self._lock:
+            try:
+                return self._workspace_profiles[workspace_id]
+            except KeyError as exc:
+                raise ArtifactNotFoundError(f"workspace profile not found: {workspace_id}") from exc
+
+    def get_workspace_profile_by_slug(self, slug: str) -> WorkspaceProfile | None:
+        normalized = slug.strip().lower()
+        with self._lock:
+            return next(
+                (item for item in self._workspace_profiles.values() if item.slug == normalized),
+                None,
+            )
+
+    def list_workspace_profiles(self) -> tuple[WorkspaceProfile, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    self._workspace_profiles.values(),
+                    key=lambda item: (item.display_name.casefold(), item.id),
+                )
+            )
+
+    def add_workspace_knowledge(self, item: WorkspaceKnowledgeItem) -> WorkspaceKnowledgeItem:
+        with self._lock:
+            if item.workspace_id not in self._workspace_profiles:
+                raise ArtifactNotFoundError(f"workspace profile not found: {item.workspace_id}")
+            existing = self._workspace_knowledge.get(item.id)
+            if existing is not None:
+                return existing
+            self._workspace_knowledge[item.id] = item
+            return item
+
+    def save_workspace_knowledge(self, item: WorkspaceKnowledgeItem) -> None:
+        with self._lock:
+            existing = self._workspace_knowledge.get(item.id)
+            if existing is None:
+                raise ArtifactNotFoundError(f"workspace knowledge not found: {item.id}")
+            if item.workspace_id != existing.workspace_id:
+                raise ValueError("knowledge cannot move between workspaces")
+            if item.revision != existing.revision + 1:
+                raise ConcurrentUpdateError("workspace knowledge revision is stale")
+            self._workspace_knowledge[item.id] = item
+
+    def get_workspace_knowledge(self, item_id: str) -> WorkspaceKnowledgeItem:
+        with self._lock:
+            try:
+                return self._workspace_knowledge[item_id]
+            except KeyError as exc:
+                raise ArtifactNotFoundError(f"workspace knowledge not found: {item_id}") from exc
+
+    def list_workspace_knowledge(
+        self,
+        workspace_id: str,
+        *,
+        reusable_only: bool = False,
+        active_only: bool = False,
+    ) -> tuple[WorkspaceKnowledgeItem, ...]:
+        with self._lock:
+            self.get_workspace_profile(workspace_id)
+            return tuple(
+                sorted(
+                    (
+                        item
+                        for item in self._workspace_knowledge.values()
+                        if item.workspace_id == workspace_id
+                        and (not reusable_only or item.reusable)
+                        and (not active_only or item.active)
+                    ),
+                    key=lambda item: (item.updated_at, item.id),
+                    reverse=True,
                 )
             )
 

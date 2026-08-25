@@ -10,14 +10,20 @@ from lorchestrateur.ai.router import AIRouter
 from lorchestrateur.analytics.factory import create_analytics_registry
 from lorchestrateur.analytics.registry import AnalyticsRegistry
 from lorchestrateur.analytics.service import AnalyticsPolicy, AnalyticsService
+from lorchestrateur.application.automation import (
+    AutomationFacade,
+    StrategyContextProvider,
+)
+from lorchestrateur.application.background import LocalWorkflowCoordinator
 from lorchestrateur.application.execution import ContentWorkflowExecutor
 from lorchestrateur.application.service import OrchestrationService
+from lorchestrateur.application.workspaces import WorkspaceService
 from lorchestrateur.config import Settings
 from lorchestrateur.domain.learning import LearningMode
 from lorchestrateur.domain.platform_content import QualityPolicy
 from lorchestrateur.domain.workflow import StateMachine
 from lorchestrateur.learning.service import LearningPolicy, LearningService
-from lorchestrateur.persistence.contracts import LearningRepository
+from lorchestrateur.persistence.contracts import AutomationRepository
 from lorchestrateur.persistence.sqlite import SQLiteContentJobRepository
 from lorchestrateur.platforms.builtins import create_default_registry
 from lorchestrateur.publishing.factory import create_publishing_registry
@@ -28,7 +34,7 @@ from lorchestrateur.web.demo import create_demo_provider
 
 @dataclass(frozen=True, slots=True)
 class WebComponents:
-    repository: LearningRepository
+    repository: AutomationRepository
     service: OrchestrationService
     executor: ContentWorkflowExecutor
     publishing_registry: PublishingRegistry
@@ -36,18 +42,24 @@ class WebComponents:
     analytics_registry: AnalyticsRegistry
     analytics_service: AnalyticsService
     learning_service: LearningService
+    workspace_service: WorkspaceService
+    automation_facade: AutomationFacade
+    workflow_coordinator: LocalWorkflowCoordinator
 
 
 def compose_web_components(
     settings: Settings,
     *,
-    repository: LearningRepository | None = None,
+    repository: AutomationRepository | None = None,
+    run_workflows_inline: bool = False,
 ) -> WebComponents:
     registry = create_default_registry()
     selected_repository = repository or SQLiteContentJobRepository.from_database_url(
         settings.database_url,
         platform_registry=registry,
     )
+    workspace_service = WorkspaceService(selected_repository)
+    workspace_service.ensure_default()
     if settings.app_ai_mode == "demo":
         router = AIRouter(
             (create_demo_provider(),),
@@ -75,7 +87,7 @@ def compose_web_components(
         registry,
         ai_router=router,
         quality_policy=QualityPolicy(settings.platform_min_quality_score),
-        learning_context_provider=learning_service.strategy_context_for_job,
+        learning_context_provider=StrategyContextProvider(selected_repository, learning_service),
     )
     publishing_registry = create_publishing_registry(settings)
     publication_service = PublicationService(
@@ -105,13 +117,22 @@ def compose_web_components(
             stale_after_seconds=settings.analytics_stale_after_seconds,
         ),
     )
+    executor = ContentWorkflowExecutor(service, selected_repository)
     return WebComponents(
         repository=selected_repository,
         service=service,
-        executor=ContentWorkflowExecutor(service, selected_repository),
+        executor=executor,
         publishing_registry=publishing_registry,
         publication_service=publication_service,
         analytics_registry=analytics_registry,
         analytics_service=analytics_service,
         learning_service=learning_service,
+        workspace_service=workspace_service,
+        automation_facade=AutomationFacade(selected_repository, service, learning_service),
+        workflow_coordinator=LocalWorkflowCoordinator(
+            executor,
+            service,
+            selected_repository,
+            run_inline=run_workflows_inline,
+        ),
     )

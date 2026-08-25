@@ -21,6 +21,7 @@ from lorchestrateur.learning.service import LearningService
 from lorchestrateur.persistence.contracts import (
     AnalyticsRepository,
     ArtifactNotFoundError,
+    AutomationRepository,
     ContentIntelligenceRepository,
     LearningRepository,
 )
@@ -106,11 +107,18 @@ def present_job(job: ContentJob) -> dict[str, Any]:
 
 
 def dashboard_view(
-    repository: ContentIntelligenceRepository,
+    repository: AutomationRepository,
     analytics_service: AnalyticsService | None = None,
     learning_service: LearningService | None = None,
+    *,
+    workspace_id: str | None = None,
 ) -> dict[str, Any]:
-    jobs = repository.list_jobs()
+    jobs = tuple(
+        job
+        for job in repository.list_jobs()
+        if workspace_id is None or job.workspace_id == workspace_id
+    )
+    job_ids = {job.id for job in jobs}
     counts = Counter(job.state for job in jobs)
     processing_states = {
         ContentJobState.CREATED,
@@ -120,15 +128,20 @@ def dashboard_view(
         ContentJobState.ADAPTING_PLATFORMS,
         ContentJobState.VALIDATING,
     }
-    publications = (
+    all_publications = (
         repository.list_publications() if hasattr(repository, "list_publications") else ()
     )
+    publications = tuple(item for item in all_publications if item.job_id in job_ids)
     publication_counts = Counter(item.status.value for item in publications)
     analytics_runs = (
-        repository.list_analytics_runs() if hasattr(repository, "list_analytics_runs") else ()
+        tuple(item for item in repository.list_analytics_runs() if item.job_id in job_ids)
+        if hasattr(repository, "list_analytics_runs")
+        else ()
     )
     snapshots = (
-        repository.list_metric_snapshots() if hasattr(repository, "list_metric_snapshots") else ()
+        tuple(item for item in repository.list_metric_snapshots() if item.job_id in job_ids)
+        if hasattr(repository, "list_metric_snapshots")
+        else ()
     )
     analytics_jobs = []
     if analytics_service is not None:
@@ -143,6 +156,68 @@ def dashboard_view(
                         "platforms": [_present_platform_performance(item) for item in platforms],
                     }
                 )
+    actions: list[dict[str, str]] = []
+    for job in jobs:
+        if job.state is ContentJobState.AWAITING_APPROVAL:
+            actions.append(
+                {"kind": "review", "label": "Revue requise", "detail": job.idea, "job_id": job.id}
+            )
+        elif job.state in {ContentJobState.PAUSED, ContentJobState.FAILED}:
+            actions.append(
+                {
+                    "kind": "attention",
+                    "label": STATUS_LABELS[job.state],
+                    "detail": job.idea,
+                    "job_id": job.id,
+                }
+            )
+        elif job.state is ContentJobState.RESEARCHING and not any(
+            item.evidence_status.value == "reviewed" for item in repository.list_sources(job.id)
+        ):
+            actions.append(
+                {
+                    "kind": "source",
+                    "label": "Source revue requise",
+                    "detail": job.idea,
+                    "job_id": job.id,
+                }
+            )
+        if job.state is ContentJobState.APPROVED and "instagram" in job.target_platforms:
+            instagram = repository.list_platform_contents(job.id, platform="instagram")
+            if instagram and not repository.list_media_assets(instagram[-1].id):
+                actions.append(
+                    {
+                        "kind": "media",
+                        "label": "Média Instagram requis",
+                        "detail": job.idea,
+                        "job_id": job.id,
+                    }
+                )
+    for publication in publications:
+        if publication.status.value in {"failed", "needs_reconciliation"}:
+            actions.append(
+                {
+                    "kind": "delivery",
+                    "label": "Livraison à vérifier",
+                    "detail": PLATFORM_LABELS.get(publication.platform, publication.platform),
+                    "job_id": publication.job_id,
+                }
+            )
+    recommendations = (
+        repository.list_optimization_recommendations(workspace_id=workspace_id)
+        if hasattr(repository, "list_optimization_recommendations")
+        else ()
+    )
+    for item in recommendations:
+        if item.status is RecommendationStatus.PROPOSED:
+            actions.append(
+                {
+                    "kind": "learning",
+                    "label": "Décision d’apprentissage",
+                    "detail": item.rationale,
+                    "job_id": "",
+                }
+            )
     return {
         "total": len(jobs),
         "processing": sum(counts[state] for state in processing_states),
@@ -150,6 +225,7 @@ def dashboard_view(
         "approved": counts[ContentJobState.APPROVED],
         "attention": counts[ContentJobState.PAUSED] + counts[ContentJobState.FAILED],
         "recent": [present_job(job) for job in jobs[:6]],
+        "actions": actions[:8],
         "publication": {
             "scheduled": publication_counts["scheduled"],
             "publishing": publication_counts["publishing"],
@@ -182,12 +258,15 @@ def dashboard_view(
             if hasattr(repository, "list_performance_observations")
             else 0,
             "proposed": sum(
-                item.status is RecommendationStatus.PROPOSED
-                for item in repository.list_optimization_recommendations()
+                item.status is RecommendationStatus.PROPOSED for item in recommendations
             )
             if hasattr(repository, "list_optimization_recommendations")
             else 0,
-            "active": len(repository.list_learning_profile_entries(active_only=True))
+            "active": len(
+                repository.list_learning_profile_entries(
+                    workspace_id=workspace_id, active_only=True
+                )
+            )
             if hasattr(repository, "list_learning_profile_entries")
             else 0,
         },
@@ -262,9 +341,18 @@ def learning_overview_view(
 
 
 def analytics_overview_view(
-    repository: AnalyticsRepository, service: AnalyticsService
+    repository: AnalyticsRepository,
+    service: AnalyticsService,
+    *,
+    workspace_id: str | None = None,
 ) -> dict[str, Any]:
-    jobs = [job for job in repository.list_jobs() if job.state is ContentJobState.PUBLISHED]
+    jobs = [
+        job
+        for job in repository.list_jobs()
+        if job.state is ContentJobState.PUBLISHED
+        and (workspace_id is None or job.workspace_id == workspace_id)
+    ]
+    job_ids = {job.id for job in jobs}
     contents = []
     for job in jobs:
         platforms = service.summarize_job(job.id)
@@ -277,8 +365,8 @@ def analytics_overview_view(
                 ),
             }
         )
-    runs = repository.list_analytics_runs()
-    snapshots = repository.list_metric_snapshots()
+    runs = tuple(item for item in repository.list_analytics_runs() if item.job_id in job_ids)
+    snapshots = tuple(item for item in repository.list_metric_snapshots() if item.job_id in job_ids)
     return {
         "demo_mode": service.policy.demo_mode,
         "external_enabled": service.policy.external_collection_enabled,
@@ -453,8 +541,22 @@ def workspace_view(
         if hasattr(repository, "get_job_learning_context")
         else None
     )
+    profile = (
+        _optional(lambda: repository.get_workspace_profile(job.workspace_id))
+        if hasattr(repository, "get_workspace_profile")
+        else None
+    )
     return {
         "job": job_view,
+        "profile": (
+            {
+                "id": profile.id,
+                "name": profile.display_name,
+                "revision": profile.revision,
+            }
+            if profile is not None
+            else None
+        ),
         "sources": [
             {
                 "id": source.id,
@@ -469,6 +571,9 @@ def workspace_view(
                     else "Non revue"
                 ),
                 "retrieved_at": _format_datetime(source.retrieved_at),
+                "knowledge_reused": source.metadata.get("provenance")
+                == "approved_workspace_knowledge",
+                "knowledge_item_id": source.metadata.get("knowledge_item_id"),
             }
             for source in sources
         ],

@@ -6,13 +6,13 @@ import logging
 import secrets
 from typing import Any
 
-from flask import Flask, render_template
+from flask import Flask, render_template, session
 from werkzeug.exceptions import HTTPException
 
 from lorchestrateur.config import ConfigurationError, Settings
 from lorchestrateur.persistence.contracts import (
     ArtifactNotFoundError,
-    ContentIntelligenceRepository,
+    AutomationRepository,
     JobNotFoundError,
 )
 from lorchestrateur.web.composition import compose_web_components
@@ -23,7 +23,7 @@ from lorchestrateur.web.security import csrf_token, enforce_csrf
 def create_app(
     settings: Settings | None = None,
     *,
-    repository: ContentIntelligenceRepository | None = None,
+    repository: AutomationRepository | None = None,
     test_config: dict[str, Any] | None = None,
 ) -> Flask:
     selected_settings = settings or Settings.from_env()
@@ -49,6 +49,7 @@ def create_app(
     app.extensions["lorchestrateur_components"] = compose_web_components(
         selected_settings,
         repository=repository,
+        run_workflows_inline=bool(app.config.get("TESTING")),
     )
     app.before_request(enforce_csrf)
     app.context_processor(lambda: {"csrf_token": csrf_token})
@@ -60,6 +61,19 @@ def create_app(
             "app_env": selected_settings.app_env,
         }
     )
+
+    def automation_shell_context():
+        components = app.extensions["lorchestrateur_components"]
+        profiles = components.repository.list_workspace_profiles()
+        selected_id = session.get("workspace_id", "local-workspace")
+        selected = next((item for item in profiles if item.id == selected_id), profiles[0])
+        return {
+            "expert_mode": bool(session.get("expert_mode", False)),
+            "workspace_profiles": profiles,
+            "current_workspace": selected,
+        }
+
+    app.context_processor(automation_shell_context)
     app.register_blueprint(bp)
 
     @app.errorhandler(JobNotFoundError)
@@ -89,3 +103,7 @@ def create_app(
         return render_template("errors/500.html"), 500
 
     return app
+
+
+# Attach the V1.1 endpoints to the existing blueprint after its shared helpers are defined.
+from lorchestrateur.web import automation_routes as _automation_routes  # noqa: E402, F401

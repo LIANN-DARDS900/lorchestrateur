@@ -4,14 +4,16 @@ L'Orchestrateur is a deterministic-first system for governed content intelligenc
 orchestration. It turns an idea and reviewed evidence into a structured strategy and durable
 canonical master content—not autonomous agent conversations.
 
-> **Project status:** Governed Learning & Optimization V1. The repository implements an evidence-aware pipeline using
+> **Project status:** Automation-First UX V1.1. The repository implements an evidence-aware pipeline using
 > governed Gemini and OpenRouter adapters, free-first routing, typed structured generation, and a
 > professional local French web application for creating, reviewing, and approving durable Blog,
 > X, Instagram, and Facebook variants. Approved content can be previewed, simulated, scheduled, and
 > delivered through governed publication adapters with durable receipts. Publication-linked
 > analytics records transparent historical metric snapshots and data freshness. Deterministic cohort
 > comparisons can now propose scoped recommendations, but only a human-accepted profile may guide a
-> future strategy request. Autonomous optimization, research, media generation, remote deletion, and
+> future strategy request. A project-first Quick Create experience now reuses explicitly approved
+> workspace knowledge and visualizes real orchestration checkpoints before review. Autonomous optimization,
+> research, media generation, remote deletion, and
 > enterprise authentication are not implemented.
 
 ## Current foundation
@@ -60,12 +62,21 @@ canonical master content—not autonomous agent conversations.
 - Durable recommendation proposals with human accept/reject, expiry, contradiction, and supersession
 - Scoped, opt-in learning profiles that preserve explicit user-constraint precedence
 - Strict demo/live learning isolation and learning disabled by default
+- Durable revisioned workspace profiles with editorial defaults and business constraints
+- Workspace-isolated, explicitly approved reusable evidence with preserved provenance
+- Automation-first Quick Create backed by a thin framework-neutral `AutomationFacade`
+- Real-state live orchestration with requested-channel branches and no simulated progress
+- Bounded local web execution with in-process duplicate-submission protection
+- Normal and Expert presentation depth over the same authoritative workflow
+- Derived Action Inbox, governed bulk review, and a publication-record calendar
 
 Architecture details are in [docs/architecture.md](docs/architecture.md) and
 [docs/content-intelligence.md](docs/content-intelligence.md). Governed metric semantics and live
 adapter limits are documented in [docs/analytics.md](docs/analytics.md).
 Governed cohort semantics and the human decision boundary are documented in
 [docs/learning.md](docs/learning.md).
+The project-first experience, live-state rules, and local execution limits are documented in
+[docs/automation-first-ux.md](docs/automation-first-ux.md).
 
 ## Workflow model
 
@@ -201,10 +212,12 @@ $env:APP_AI_MODE = "demo"
 python -m lorchestrateur.web
 ```
 
-Open `http://127.0.0.1:5000`. Create a content workflow, add at least one source marked as reviewed,
-launch orchestration, inspect the strategy, canonical master content, four channel adaptations and
-quality breakdowns, then approve. The publication workspace keeps approval and delivery as separate
-human decisions. Defaults remain demo plus dry run, so no external delivery occurs.
+Open `http://127.0.0.1:5000`. Select or configure a project, add approved reusable knowledge once,
+then enter an idea, confirm channels, and choose **Orchestrer**. The live page reflects persisted
+sources, strategy, canonical master content, requested channel adaptations, and quality checkpoints;
+it contains no fake percentage or ETA. Review and approve remain explicit. The publication workspace
+keeps approval and delivery as separate human decisions. Defaults remain demo plus dry run, so no
+external delivery occurs.
 
 For a complete no-network delivery demonstration, explicitly set
 `PUBLISHING_ADAPTER_MODE=demo` and `PUBLISHING_DRY_RUN=false`. Instagram still requires ordered

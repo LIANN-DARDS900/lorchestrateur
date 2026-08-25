@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Orchestration · L’Orchestrateur{% endblock %}
+{% block content %}
+<div class="page-heading orchestration-heading"><p class="eyebrow">Orchestration en direct</p><h1>L’Orchestrateur prépare votre contenu</h1><p>{{ job.idea }}</p></div>
+<section class="panel orchestration-live" data-orchestration-status-url="{{ url_for('web.orchestration_status', job_id=job.id) }}" data-terminal="{{ 'true' if orchestration.terminal else 'false' }}" aria-labelledby="orchestration-title">
+  <div class="panel-heading"><div><p class="eyebrow">État réel</p><h2 id="orchestration-title" data-orchestration-label>{{ orchestration.status }}</h2></div><span class="status status-progress" data-orchestration-state>{{ orchestration.status }}</span></div>
+  <p class="orchestration-message" data-orchestration-message aria-live="polite">{{ orchestration.message }}</p>
+  {% macro orchestration_node(node) %}<li id="orchestration-{{ node.key }}" class="orchestration-step step-{{ node.state }}" data-node-key="{{ node.key }}"><span class="step-indicator" aria-hidden="true">{% if node.state == 'completed' %}✓{% elif node.state == 'failed' %}×{% elif node.state == 'paused' %}!{% else %}•{% endif %}</span><div><strong data-node-label>{{ node.label }}</strong><small data-node-message>{{ node.message }}</small></div><span class="step-state" data-node-state>{% if node.state == 'completed' %}Terminé{% elif node.state == 'in_progress' %}En cours{% elif node.state == 'paused' %}Action requise{% elif node.state == 'failed' %}Échec{% else %}En attente{% endif %}</span></li>{% endmacro %}
+  <ol class="orchestration-steps">{% for node in orchestration.nodes if node.group == 'head' %}{{ orchestration_node(node) }}{% endfor %}</ol>
+  <div class="branch-connector" aria-hidden="true">Adaptation par canal</div>
+  <ol class="orchestration-platform-branches">{% for node in orchestration.nodes if node.group == 'platform' %}{{ orchestration_node(node) }}{% endfor %}</ol>
+  <ol class="orchestration-steps orchestration-tail">{% for node in orchestration.nodes if node.group == 'tail' %}{{ orchestration_node(node) }}{% endfor %}</ol>
+  {% if orchestration.requires_sources %}<div class="notice notice-demo" data-source-action><div><strong>Action requise</strong><span>Ce projet ne possède pas encore de source approuvée. Le brouillon est conservé et les étapes futures restent en attente.</span></div><a class="button button-primary" href="{{ url_for('web.job_workspace', job_id=job.id) }}#sources">Ajouter une source</a></div>{% endif %}
+  <div class="orchestration-actions"><a class="button button-secondary" href="{{ url_for('web.job_workspace', job_id=job.id) }}">Ouvrir l’espace de travail</a>{% if orchestration.state == 'awaiting_approval' %}<a class="button button-primary" href="{{ url_for('web.review_queue') }}">Passer à la revue</a>{% endif %}</div>
+</section>
+{% endblock %}

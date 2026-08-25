@@ -2,7 +2,7 @@
 
 ## Purpose and boundaries
 
-Application UI V1 makes L’Orchestrateur usable from a browser while preserving the existing domain
+Application UI V1.1 makes L’Orchestrateur usable from a browser while preserving the existing domain
 and application services as the source of truth. It supports content creation, manual evidence
 review, governed AI execution, structured artifact presentation, deterministic quality inspection,
 one controlled human revision, and explicit approval. Phase 6 adds a separate publication workspace
@@ -26,13 +26,16 @@ providers, score content, validate platform contracts, or change workflow state 
 
 `ContentWorkflowExecutor` is framework-neutral application code. It advances only the explicit
 existing stages and is bounded to twelve calls. It stops at `awaiting_approval`, `approved`,
-`paused`, or `failed`. Synchronous execution keeps V1 local and direct; the launch button exposes a
-busy state, but the HTTP request remains open while generation runs.
+`paused`, or `failed`. V1.1 submits web-triggered execution to a bounded local coordinator and
+redirects immediately to a real-state orchestration view. The compact status endpoint is read-only;
+its polling UI never fabricates progress. The coordinator is single-process and is not advertised as
+a distributed worker.
 
 ## User journey
 
-1. Create a draft with an idea and one or more target channels.
-2. Add manual, web, document, interview, dataset, or other source entries.
+1. Select a project, enter an idea, confirm target channels, and choose **Orchestrer**.
+2. Reuse reviewed project knowledge, or add manual, web, document, interview, dataset, or other
+   source entries when the project has no eligible evidence.
 3. Explicitly mark eligible sources as reviewed. “Reviewed” means approved for this workflow, not
    universally proven true.
 4. Launch the governed pipeline.
@@ -96,9 +99,11 @@ scene plans for Instagram, and a contextual post for Facebook. Raw JSON is not d
 
 ## Current limitations
 
-- Generation is synchronous and local; long provider calls keep one HTTP request open.
+- Generation uses a bounded local thread pool; it is not durable across process termination and its
+  duplicate-submission map is not shared between multiple web processes.
 - The generated ephemeral session secret changes at restart if `WEB_SECRET_KEY` is omitted.
-- Settings are read-only and environment-managed.
+- Sensitive runtime settings remain read-only and environment-managed; project/editorial defaults
+  and approved reusable knowledge are safely editable.
 - Evidence can be added before launch but not edited or removed through the UI.
 - Rich manual artifact editing is deferred because it requires typed revision/update services.
 - Human revision uses the existing single repair budget and regenerates requested channel variants;

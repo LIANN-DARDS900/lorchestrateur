@@ -6,15 +6,29 @@ from datetime import UTC, datetime
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
-from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
+from flask import (
+    Blueprint,
+    current_app,
+    flash,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 
 from lorchestrateur.analytics.contracts import AnalyticsCooldownError
 from lorchestrateur.domain.analytics import AnalyticsRunOutcome
 from lorchestrateur.domain.content import EvidenceStatus, SourceType
 from lorchestrateur.domain.publication import MediaAssetType, PublicationMode
 from lorchestrateur.domain.workflow import ContentJobState, StateTransitionError
-from lorchestrateur.persistence.contracts import AnalyticsRepository
+from lorchestrateur.persistence.contracts import (
+    ArtifactNotFoundError,
+    AutomationRepository,
+    JobNotFoundError,
+)
 from lorchestrateur.publishing.contracts import PublicationError
+from lorchestrateur.web.orchestration_presenter import orchestration_status_view
 from lorchestrateur.web.presenters import (
     PLATFORM_LABELS,
     analytics_job_view,
@@ -32,16 +46,12 @@ LOCAL_WORKSPACE_ID = "local-workspace"
 LOCAL_REVIEWER = "Responsable de contenu local"
 
 
-def _repository() -> AnalyticsRepository:
+def _repository() -> AutomationRepository:
     return current_app.extensions["lorchestrateur_components"].repository
 
 
 def _service():
     return current_app.extensions["lorchestrateur_components"].service
-
-
-def _executor():
-    return current_app.extensions["lorchestrateur_components"].executor
 
 
 def _publication_service():
@@ -56,11 +66,54 @@ def _learning_service():
     return current_app.extensions["lorchestrateur_components"].learning_service
 
 
+def _workspace_service():
+    return current_app.extensions["lorchestrateur_components"].workspace_service
+
+
+def _automation_facade():
+    return current_app.extensions["lorchestrateur_components"].automation_facade
+
+
+def _workflow_coordinator():
+    return current_app.extensions["lorchestrateur_components"].workflow_coordinator
+
+
+def _current_workspace_id() -> str:
+    selected = session.get("workspace_id", LOCAL_WORKSPACE_ID)
+    if any(item.id == selected for item in _repository().list_workspace_profiles()):
+        return selected
+    session["workspace_id"] = LOCAL_WORKSPACE_ID
+    return LOCAL_WORKSPACE_ID
+
+
+def _workspace_job(job_id: str):
+    job = _repository().get(job_id)
+    selected_workspace = _current_workspace_id()
+    if job.workspace_id != selected_workspace:
+        try:
+            _repository().get_workspace_profile(job.workspace_id)
+        except ArtifactNotFoundError:
+            # Pre-V1.1 jobs can reference a workspace that never had a profile.
+            # They remain reachable from the local compatibility workspace only.
+            if selected_workspace == LOCAL_WORKSPACE_ID:
+                return job
+        raise JobNotFoundError(job_id)
+    return job
+
+
 @bp.get("/")
 def dashboard():
+    workspace_id = _current_workspace_id()
     return render_template(
         "dashboard.html",
-        dashboard=dashboard_view(_repository(), _analytics_service(), _learning_service()),
+        dashboard=dashboard_view(
+            _repository(),
+            _analytics_service(),
+            _learning_service(),
+            workspace_id=workspace_id,
+        ),
+        quick_form={"idea": "", "platforms": ()},
+        platforms=PLATFORM_LABELS,
     )
 
 
@@ -70,7 +123,7 @@ def learning_overview():
     return render_template(
         "learning.html",
         learning=learning_overview_view(
-            _repository(), _learning_service(), workspace_id=LOCAL_WORKSPACE_ID
+            _repository(), _learning_service(), workspace_id=_current_workspace_id()
         ),
     )
 
@@ -80,7 +133,7 @@ def analyze_learning():
     try:
         window_hours = int(request.form.get("window_hours", ""))
         outcome = _learning_service().analyze(
-            workspace_id=LOCAL_WORKSPACE_ID,
+            workspace_id=_current_workspace_id(),
             platform=request.form.get("platform", ""),
             topic_category=request.form.get("topic_category", ""),
             objective=request.form.get("objective", ""),
@@ -105,7 +158,7 @@ def analyze_learning():
 @bp.post("/learning/recommendations/<recommendation_id>/accept")
 def accept_learning_recommendation(recommendation_id: str):
     recommendation = _repository().get_optimization_recommendation(recommendation_id)
-    if recommendation.workspace_id != LOCAL_WORKSPACE_ID:
+    if recommendation.workspace_id != _current_workspace_id():
         return _action_error("Cette recommandation n’appartient pas à cet espace.", 404)
     try:
         _learning_service().accept(
@@ -125,7 +178,7 @@ def accept_learning_recommendation(recommendation_id: str):
 @bp.post("/learning/recommendations/<recommendation_id>/reject")
 def reject_learning_recommendation(recommendation_id: str):
     recommendation = _repository().get_optimization_recommendation(recommendation_id)
-    if recommendation.workspace_id != LOCAL_WORKSPACE_ID:
+    if recommendation.workspace_id != _current_workspace_id():
         return _action_error("Cette recommandation n’appartient pas à cet espace.", 404)
     try:
         _learning_service().reject(
@@ -143,13 +196,15 @@ def reject_learning_recommendation(recommendation_id: str):
 def analytics_overview():
     return render_template(
         "analytics.html",
-        analytics=analytics_overview_view(_repository(), _analytics_service()),
+        analytics=analytics_overview_view(
+            _repository(), _analytics_service(), workspace_id=_current_workspace_id()
+        ),
     )
 
 
 @bp.get("/jobs/<job_id>/analytics")
 def job_analytics(job_id: str):
-    job = _repository().get(job_id)
+    job = _workspace_job(job_id)
     if job.state is not ContentJobState.PUBLISHED:
         return _action_error("Les analyses sont disponibles après une livraison confirmée.")
     return render_template(
@@ -160,7 +215,7 @@ def job_analytics(job_id: str):
 
 @bp.post("/jobs/<job_id>/analytics/refresh")
 def refresh_job_analytics(job_id: str):
-    job = _repository().get(job_id)
+    job = _workspace_job(job_id)
     if job.state is not ContentJobState.PUBLISHED:
         return _action_error("Seul un contenu publié peut synchroniser ses métriques.")
     receipts = [
@@ -203,85 +258,33 @@ def refresh_job_analytics(job_id: str):
 
 @bp.get("/content")
 def content_list():
-    jobs = [present_job(job) for job in _repository().list_jobs()]
-    return render_template("content_list.html", jobs=jobs)
-
-
-@bp.route("/content/new", methods=["GET", "POST"])
-def new_content():
-    errors: list[str] = []
-    form = {
-        "idea": request.form.get("idea", "").strip(),
-        "platforms": request.form.getlist("platforms"),
-        "topic_category": request.form.get("topic_category", "général").strip(),
-        "objective": request.form.get("objective", "information").strip(),
-        "use_learning": request.form.get("use_learning") == "yes",
-        "x_format": request.form.get("x_format", "auto").strip(),
-    }
-    if request.method == "POST":
-        if len(form["idea"]) < 10:
-            errors.append("Décrivez l’idée stratégique en au moins 10 caractères.")
-        invalid = set(form["platforms"]) - set(SUPPORTED_PLATFORMS)
-        if invalid:
-            errors.append("Un canal sélectionné n’est pas pris en charge.")
-        if not form["platforms"]:
-            errors.append("Sélectionnez au moins un canal.")
-        if len(form["topic_category"]) < 2:
-            errors.append("Précisez une catégorie de sujet explicite.")
-        if len(form["objective"]) < 2:
-            errors.append("Précisez l’objectif de ce contenu.")
-        if form["x_format"] not in {"auto", "single_post", "thread"}:
-            errors.append("La contrainte de format X n’est pas valide.")
-        if not errors:
-            job = _service().create_job(
-                workspace_id=LOCAL_WORKSPACE_ID,
-                idea=form["idea"],
-                target_platforms=tuple(form["platforms"]),
-            )
-            constraints = {"x_format": form["x_format"]} if "x" in form["platforms"] else {}
-            _learning_service().configure_job(
-                job,
-                topic_category=form["topic_category"],
-                objective=form["objective"],
-                use_learning=form["use_learning"],
-                explicit_constraints=constraints,
-            )
-            _service().begin_research(job.id)
-            flash("Le workflow est prêt. Ajoutez maintenant les sources autorisées.", "success")
-            return redirect(url_for("web.job_workspace", job_id=job.id))
-    return render_template(
-        "new_content.html",
-        errors=errors,
-        form=form,
-        platforms=PLATFORM_LABELS,
-        learning_enabled=_learning_service().policy.enabled,
-    ), (422 if errors else 200)
-
-
-@bp.get("/review")
-def review_queue():
+    workspace_id = _current_workspace_id()
     jobs = [
-        present_job(job)
-        for job in _repository().list_jobs()
-        if job.state is ContentJobState.AWAITING_APPROVAL
+        present_job(job) for job in _repository().list_jobs() if job.workspace_id == workspace_id
     ]
-    return render_template("review.html", jobs=jobs)
+    return render_template("content_list.html", jobs=jobs)
 
 
 @bp.get("/jobs/<job_id>")
 def job_workspace(job_id: str):
-    job = _repository().get(job_id)
+    job = _workspace_job(job_id)
     model = workspace_view(
         _repository(),
         job,
         minimum_quality_score=current_app.config["QUALITY_THRESHOLD"],
     )
-    return render_template("workspace.html", workspace=model)
+    return render_template(
+        "workspace.html",
+        workspace=model,
+        orchestration=orchestration_status_view(
+            _repository(), job, running=_workflow_coordinator().is_running(job.id)
+        ),
+    )
 
 
 @bp.get("/jobs/<job_id>/publication")
 def publication_workspace(job_id: str):
-    job = _repository().get(job_id)
+    job = _workspace_job(job_id)
     if job.state not in {
         ContentJobState.APPROVED,
         ContentJobState.PUBLISHING,
@@ -304,6 +307,7 @@ def publication_workspace(job_id: str):
 
 @bp.post("/jobs/<job_id>/publication/media")
 def attach_publication_media(job_id: str):
+    _workspace_job(job_id)
     try:
         media_type = MediaAssetType(request.form.get("media_type", ""))
         order = int(request.form.get("order", ""))
@@ -326,6 +330,7 @@ def attach_publication_media(job_id: str):
 
 @bp.post("/jobs/<job_id>/publication/publish-now")
 def publish_now(job_id: str):
+    _workspace_job(job_id)
     if request.form.get("confirmed") != "yes":
         return _action_error("Confirmez explicitement cette action de publication.", 422)
     try:
@@ -349,6 +354,7 @@ def publish_now(job_id: str):
 
 @bp.post("/jobs/<job_id>/publication/schedule")
 def schedule_publication(job_id: str):
+    _workspace_job(job_id)
     raw_time = request.form.get("scheduled_at", "").strip()
     timezone_name = request.form.get("timezone", "").strip()
     settings = current_app.extensions["lorchestrateur_settings"]
@@ -370,6 +376,7 @@ def schedule_publication(job_id: str):
 
 @bp.post("/jobs/<job_id>/publication/<publication_id>/cancel")
 def cancel_publication(job_id: str, publication_id: str):
+    _workspace_job(job_id)
     publication = _repository().get_publication(publication_id)
     if publication.job_id != job_id:
         return _action_error("Cette programmation n’appartient pas à ce workflow.", 404)
@@ -383,6 +390,7 @@ def cancel_publication(job_id: str, publication_id: str):
 
 @bp.post("/jobs/<job_id>/publication/<publication_id>/reconcile")
 def reconcile_publication(job_id: str, publication_id: str):
+    _workspace_job(job_id)
     publication = _repository().get_publication(publication_id)
     if publication.job_id != job_id:
         return _action_error("Cette publication n’appartient pas à ce workflow.", 404)
@@ -396,7 +404,7 @@ def reconcile_publication(job_id: str, publication_id: str):
 
 @bp.post("/jobs/<job_id>/sources")
 def add_source(job_id: str):
-    job = _repository().get(job_id)
+    job = _workspace_job(job_id)
     if job.state is not ContentJobState.RESEARCHING:
         return _action_error("Les sources ne peuvent plus être modifiées à cette étape.")
     title = request.form.get("title", "").strip()
@@ -406,13 +414,19 @@ def add_source(job_id: str):
     reviewed = request.form.get("reviewed") == "yes"
     if not title or not excerpt:
         return _action_error("Le titre et le résumé de la source sont obligatoires.", 422)
+    if len(title) > 300 or len(excerpt) > 5000:
+        return _action_error("La source dépasse la longueur autorisée.", 422)
     if url and not _valid_http_url(url):
         return _action_error("L’URL doit commencer par http:// ou https://.", 422)
+    if request.form.get("reuse_in_workspace") == "yes" and not reviewed:
+        return _action_error(
+            "Une source doit être revue avant d’être réutilisable dans le projet.", 422
+        )
     try:
         source_type = SourceType(type_value)
     except ValueError:
         return _action_error("Le type de source n’est pas valide.", 422)
-    _service().add_source(
+    outcome = _service().add_source(
         job_id,
         title=title,
         relevant_excerpt=excerpt,
@@ -420,27 +434,30 @@ def add_source(job_id: str):
         url=url,
         evidence_status=(EvidenceStatus.REVIEWED if reviewed else EvidenceStatus.UNVERIFIED),
     )
+    if request.form.get("reuse_in_workspace") == "yes":
+        _workspace_service().promote_source(outcome.source)
     flash("Source ajoutée au workflow.", "success")
     return redirect(url_for("web.job_workspace", job_id=job_id, _anchor="sources"))
 
 
 @bp.post("/jobs/<job_id>/launch")
 def launch_job(job_id: str):
-    job = _repository().get(job_id)
+    job = _workspace_job(job_id)
     if job.state is not ContentJobState.RESEARCHING:
         return _action_error("Ce workflow ne peut pas être lancé depuis son état actuel.")
-    result = _executor().run(job_id)
-    if result.job.state is ContentJobState.AWAITING_APPROVAL:
-        flash("Le contenu est prêt pour la revue humaine.", "success")
-    elif result.job.state is ContentJobState.PAUSED:
-        flash("La génération a été mise en pause en toute sécurité.", "warning")
-    elif result.job.state is ContentJobState.FAILED:
-        flash("Le workflow s’est arrêté sans exposer de détail technique.", "error")
-    return redirect(url_for("web.job_workspace", job_id=job_id))
+    started = _workflow_coordinator().submit(job_id)
+    flash(
+        "Orchestration lancée. Les étapes affichées proviennent de l’état persisté."
+        if started
+        else "Une orchestration est déjà en cours pour ce contenu.",
+        "success" if started else "warning",
+    )
+    return redirect(url_for("web.orchestration_live", job_id=job_id))
 
 
 @bp.post("/jobs/<job_id>/approve")
 def approve_job(job_id: str):
+    _workspace_job(job_id)
     try:
         _service().approve(job_id, approved_by=LOCAL_REVIEWER)
     except StateTransitionError:
@@ -453,6 +470,7 @@ def approve_job(job_id: str):
 
 @bp.post("/jobs/<job_id>/request-changes")
 def request_changes(job_id: str):
+    _workspace_job(job_id)
     reason = request.form.get("reason", "").strip()
     if len(reason) < 5:
         return _action_error("Précisez les modifications demandées.", 422)
@@ -467,25 +485,19 @@ def request_changes(job_id: str):
     if updated.state is ContentJobState.PAUSED:
         flash("Le budget de régénération est épuisé : le workflow est en pause.", "warning")
     else:
-        result = _executor().run(job_id, human_revision_guidance=reason)
-        if result.job.state is ContentJobState.AWAITING_APPROVAL:
-            flash("La nouvelle révision est prête pour approbation.", "success")
-        else:
-            flash("La régénération s’est arrêtée à une limite gouvernée.", "warning")
-    return redirect(url_for("web.job_workspace", job_id=job_id))
+        _workflow_coordinator().submit(job_id, human_guidance=reason)
+        flash("La révision contrôlée a été lancée.", "success")
+    return redirect(url_for("web.orchestration_live", job_id=job_id))
 
 
 @bp.post("/jobs/<job_id>/regenerate")
 def regenerate_job(job_id: str):
-    job = _repository().get(job_id)
+    job = _workspace_job(job_id)
     if job.state is not ContentJobState.ADAPTING_PLATFORMS or job.repair_attempts < 1:
         return _action_error("Aucune régénération contrôlée n’est disponible.")
-    result = _executor().run(job_id)
-    if result.job.state is ContentJobState.AWAITING_APPROVAL:
-        flash("La nouvelle révision est prête pour approbation.", "success")
-    else:
-        flash("La régénération s’est arrêtée à une limite gouvernée.", "warning")
-    return redirect(url_for("web.job_workspace", job_id=job_id))
+    _workflow_coordinator().submit(job_id)
+    flash("La régénération contrôlée a été lancée.", "success")
+    return redirect(url_for("web.orchestration_live", job_id=job_id))
 
 
 @bp.get("/providers")
@@ -547,6 +559,7 @@ def providers():
 @bp.get("/settings")
 def settings_page():
     settings = current_app.extensions["lorchestrateur_settings"]
+    workspace_id = _current_workspace_id()
     return render_template(
         "settings.html",
         quality_threshold=settings.platform_min_quality_score,
@@ -579,6 +592,9 @@ def settings_page():
         learning_policy=("Analyse activée" if settings.learning_enabled else "Analyse désactivée"),
         learning_apply_enabled=settings.learning_apply_enabled,
         learning_min_sample_size=settings.learning_min_sample_size,
+        profile=_repository().get_workspace_profile(workspace_id),
+        knowledge=_repository().list_workspace_knowledge(workspace_id),
+        platforms=PLATFORM_LABELS,
     )
 
 

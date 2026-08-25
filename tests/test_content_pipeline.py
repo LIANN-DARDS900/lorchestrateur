@@ -10,7 +10,6 @@ from lorchestrateur.persistence.contracts import ArtifactNotFoundError
 from lorchestrateur.persistence.memory import InMemoryContentJobRepository
 from lorchestrateur.platforms.builtins import create_default_registry
 
-
 SOURCE_ID = "source-1"
 
 

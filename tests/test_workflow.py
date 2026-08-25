@@ -8,7 +8,6 @@ from lorchestrateur.domain.workflow import (
     StateTransitionError,
 )
 
-
 NOW = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
 
 
