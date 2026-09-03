@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Fournisseurs IA · L’Orchestrateur{% endblock %}
+{% block content %}
+<div class="page-heading"><p class="eyebrow">Politique d’exécution</p><h1>Gouvernance de l’IA</h1><p>Consultez la configuration opérationnelle sans exposer aucune information d’authentification.</p></div>
+{% if demo_mode %}<div class="notice notice-demo"><strong>Mode démonstration actif</strong><span>Les contenus sont produits par un fournisseur déterministe local. Aucun appel externe n’est effectué.</span></div>{% endif %}
+<section class="governance-grid">
+  <article class="policy-card"><span class="card-label">IA payante</span><strong>{{ 'Autorisée' if paid_enabled else 'Désactivée' }}</strong><p>{{ 'La politique permet explicitement les modèles payants.' if paid_enabled else 'L’application échoue en mode fermé et n’active aucun modèle payant.' }}</p></article>
+  <article class="policy-card"><span class="card-label">Ordre des fournisseurs</span><strong>{{ provider_order|join(' → ') }}</strong><p>L’ordre est déterministe et configuré par l’environnement.</p></article>
+</section>
+<section class="panel"><div class="panel-heading"><div><p class="eyebrow">Fournisseurs</p><h2>État de configuration</h2></div></div><div class="provider-grid">
+  {% for provider in providers %}<article class="provider-card"><div class="provider-title"><span class="provider-mark">{{ provider.name[0] }}</span><div><h3>{{ provider.name }}</h3><span class="status {{ 'status-success' if provider.configured else 'status-muted' }}">{{ 'Configuré' if provider.configured else 'Non configuré' }}</span></div></div><dl><div><dt>Modèle</dt><dd>{{ provider.model }}</dd></div><div><dt>Classe de coût déclarée</dt><dd>{{ provider.cost|capitalize }}</dd></div><div><dt>Activation</dt><dd>{{ 'Activé' if provider.enabled else 'Désactivé' }}</dd></div></dl><p class="field-help">Cet écran indique la configuration, pas une vérification en temps réel de disponibilité.</p></article>{% endfor %}
+</div></section>
+<section class="panel"><div class="panel-heading"><div><p class="eyebrow">Livraison multicanal</p><h2>Adaptateurs de publication</h2></div></div>
+{% if publishing_dry_run %}<div class="notice notice-demo"><strong>Mode simulation</strong><span>Les contrôles sont exécutés sans appel de publication{% if publishing_demo_mode %}, avec les adaptateurs de démonstration{% endif %}.</span></div>{% elif publishing_demo_mode %}<div class="notice notice-demo"><strong>Mode démonstration</strong><span>Aucun contenu n’est envoyé vers une plateforme externe.</span></div>{% endif %}
+<div class="provider-grid">{% for provider in publishing_providers %}<article class="provider-card"><div class="provider-title"><span class="provider-mark">{{ provider.name[0] }}</span><div><h3>{{ provider.name }}</h3><span class="status {{ 'status-success' if provider.configured else 'status-muted' }}">{{ 'Configuré' if provider.configured else 'Non configuré' }}</span></div></div><dl><div><dt>Destination</dt><dd>{{ provider.destination }}</dd></div><div><dt>Adaptateur</dt><dd>{{ provider.adapter }}</dd></div></dl></article>{% endfor %}</div>
+<p class="field-help">Publication globale : {{ 'activée explicitement' if publishing_enabled else 'désactivée par défaut' }}. Aucune information d’authentification n’est affichée.</p>
+</section>
+<section class="panel"><div class="panel-heading"><div><p class="eyebrow">Performance Intelligence</p><h2>Adaptateurs d’analyses</h2></div></div>
+{% if analytics_demo_mode %}<div class="notice notice-demo"><strong>Données de démonstration</strong><span>La collecte est locale, déterministe et sans réseau.</span></div>{% elif not analytics_enabled %}<div class="notice notice-danger"><strong>Collecte externe désactivée</strong><span>La présence d’un jeton n’autorise aucun appel analytique.</span></div>{% endif %}
+<div class="provider-grid">{% for provider in analytics_providers %}<article class="provider-card"><div class="provider-title"><span class="provider-mark">{{ provider.name[0] }}</span><div><h3>{{ provider.name }}</h3><span class="status {{ 'status-success' if provider.configured else 'status-muted' }}">{{ 'Configuré' if provider.configured else 'Indisponible' }}</span></div></div><dl><div><dt>Adaptateur</dt><dd>{{ provider.adapter }}</dd></div><div><dt>Mode</dt><dd>{{ 'Démonstration' if analytics_demo_mode else 'Réel gouverné' }}</dd></div></dl></article>{% endfor %}</div>
+<p class="field-help">Les permissions d’analyse sont configurées séparément des droits de publication. Aucun jeton n’est rendu.</p>
+</section>
+{% endblock %}

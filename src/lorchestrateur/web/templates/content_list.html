@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Contenus · L’Orchestrateur{% endblock %}
+{% block content %}
+<div class="page-heading heading-with-action">
+  <div><p class="eyebrow">Bibliothèque</p><h1>Contenus</h1><p>Retrouvez les workflows, leurs canaux et leur état de gouvernance.</p></div>
+  <a class="button button-primary" href="{{ url_for('web.new_content') }}">Nouveau contenu</a>
+</div>
+<section class="panel">
+  {% if jobs %}
+    <div class="job-list">
+      {% for job in jobs %}
+        <a class="job-row job-row-wide" href="{{ url_for('web.job_workspace', job_id=job.id) }}">
+          <span class="job-main"><strong>{{ job.idea }}</strong><small>Créé le {{ job.created_at }} · Mis à jour le {{ job.updated_at }}</small></span>
+          <span class="platform-tags">{% for platform in job.platforms %}<span class="tag">{{ platform }}</span>{% endfor %}</span>
+          <span class="status status-{{ job.status_tone }}">{{ job.status }}</span>
+          <span class="row-arrow" aria-hidden="true">→</span>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty-state"><h2>Votre bibliothèque est vide</h2><p>Créez un workflow pour structurer votre première orchestration multicanale.</p><a class="button button-primary" href="{{ url_for('web.new_content') }}">Créer un contenu</a></div>
+  {% endif %}
+</section>
+{% endblock %}

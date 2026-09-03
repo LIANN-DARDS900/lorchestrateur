@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% from "macros/platform.html" import render_platform %}
+{% block title %}Publication · {{ publication.job.idea }}{% endblock %}
+{% block content %}
+<div class="workspace-header publication-header">
+  <div class="workspace-breadcrumb"><a href="{{ url_for('web.job_workspace', job_id=publication.job.id) }}">Workflow</a><span>/</span><span>Publication</span></div>
+  <div class="workspace-title-row"><div><p class="eyebrow">Autorisation distincte</p><h1>Prévisualisation de la publication</h1><p>{{ publication.job.idea }}</p></div><span class="status status-{{ publication.job.status_tone }}">{{ publication.job.status }}</span></div>
+</div>
+
+{% if publication.dry_run %}<div class="notice notice-demo mode-banner"><strong>MODE SIMULATION</strong><span>Aucune publication réelle ne sera effectuée{% if publication.demo_mode %} · adaptateurs de démonstration actifs{% endif %}.</span></div>{% elif publication.demo_mode %}<div class="notice notice-demo mode-banner"><strong>MODE DÉMONSTRATION</strong><span>Aucun contenu n’est envoyé vers une plateforme externe.</span></div>{% elif not publication.external_enabled %}<div class="notice notice-danger"><strong>Publication désactivée</strong><span>La politique de l’application interdit toute livraison externe.</span></div>{% else %}<div class="notice notice-live"><strong>MODE RÉEL</strong><span>Une confirmation explicite est obligatoire avant toute livraison.</span></div>{% endif %}
+
+<section class="panel section-panel">
+  <div class="panel-heading"><div><p class="eyebrow">Contrôle final</p><h2>Préparation par canal</h2><p>Révision exacte, destination, qualité et médias sont vérifiés avant la création d’un ordre.</p></div></div>
+  <div class="publication-readiness-grid">
+  {% for item in publication.previews %}
+    <article class="publication-readiness-card">
+      <div class="readiness-title"><div><span class="platform-chip">{{ item.label }}</span><strong>Révision {{ item.revision }}</strong></div><span class="status {{ 'status-success' if item.ready else 'status-danger' }}">{{ 'Prêt' if item.ready else 'Non prêt' }}</span></div>
+      <dl><div><dt>Destination</dt><dd>{{ item.destination }}</dd></div><div><dt>Qualité</dt><dd>{{ item.quality_score if item.quality_score is not none else '—' }}/100</dd></div>{% if item.platform == 'instagram' %}<div><dt>Médias</dt><dd>{{ item.media_attached }}/{{ item.media_required }}</dd></div>{% endif %}</dl>
+      {% if item.warnings %}<ul class="warning-list">{% for warning in item.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>{% endif %}
+      {% if item.platform == 'instagram' %}
+        <div class="media-slots">{% for index in range(1, item.media_required + 1) %}{% set attached = item.media|selectattr('order', 'equalto', index)|list %}<div class="media-slot"><span>{{ index }}</span><strong>{{ 'Média attaché' if attached else 'Média manquant' }}</strong><small>{{ attached[0].media_type.value|capitalize if attached else 'Image/vidéo publique requise' }}</small></div>{% endfor %}</div>
+        {% if publication.job.state == 'approved' %}<form class="media-form" method="post" action="{{ url_for('web.attach_publication_media', job_id=publication.job.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="platform_content_id" value="{{ item.content_id }}"><div><label for="media-order-{{ item.content_id }}">Ordre</label><input id="media-order-{{ item.content_id }}" type="number" min="1" max="10" name="order" required></div><div><label for="media-type-{{ item.content_id }}">Type</label><select id="media-type-{{ item.content_id }}" name="media_type"><option value="image">Image</option><option value="video">Vidéo</option></select></div><div class="wide"><label for="media-url-{{ item.content_id }}">URL HTTPS publiquement accessible</label><input id="media-url-{{ item.content_id }}" type="url" name="source_url" required placeholder="https://cdn.example.com/media.jpg"></div><div class="wide"><label for="media-alt-{{ item.content_id }}">Description accessible</label><input id="media-alt-{{ item.content_id }}" name="alt_text" maxlength="300"></div><button class="button button-secondary" type="submit">Attacher le média</button></form>{% endif %}
+      {% endif %}
+    </article>
+  {% endfor %}
+  </div>
+</section>
+
+<section class="panel section-panel exact-content"><div class="panel-heading"><div><p class="eyebrow">Révisions approuvées</p><h2>Contenu exact à livrer</h2></div></div>{% for item in publication.previews %}{% if item.content %}{{ render_platform(item.content) }}{% endif %}{% endfor %}</section>
+
+{% if publication.job.state == 'approved' %}<section class="panel publication-controls"><div><p class="eyebrow">Décision humaine de livraison</p><h2>Publier maintenant ou programmer</h2><p>L’approbation éditoriale n’autorise aucune publication automatique. Cette action est indépendante.</p></div>
+  <div class="publication-actions">
+    <form class="confirmation-card" method="post" action="{{ url_for('web.publish_now', job_id=publication.job.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label class="review-check"><input type="checkbox" name="confirmed" value="yes" required><span><strong>Je confirme l’ordre de {{ 'simulation' if publication.dry_run else ('démonstration' if publication.demo_mode else 'publication réelle') }}</strong><small>{{ 'Aucune plateforme externe ne sera contactée.' if publication.dry_run or publication.demo_mode else 'Le contenu approuvé sera envoyé aux destinations affichées.' }}</small></span></label><button class="button button-primary" type="submit" {% if not publication.all_ready %}disabled{% endif %}>{{ 'Exécuter la simulation' if publication.dry_run else 'Publier maintenant' }}</button></form>
+    <form class="schedule-card" method="post" action="{{ url_for('web.schedule_publication', job_id=publication.job.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><div><label for="scheduled-at">Date et heure</label><input id="scheduled-at" type="datetime-local" name="scheduled_at" required></div><div><label for="timezone">Fuseau horaire</label><select id="timezone" name="timezone"><option value="{{ app_timezone }}">{{ app_timezone }}</option><option value="UTC">UTC</option></select></div><button class="button button-secondary" type="submit" {% if not publication.all_ready %}disabled{% endif %}>Programmer</button></form>
+  </div>
+</section>{% endif %}
+
+<section class="panel section-panel"><div class="panel-heading"><div><p class="eyebrow">Traçabilité de livraison</p><h2>Ordres et reçus</h2></div></div>
+{% if publication.publications %}<div class="publication-list">{% for item in publication.publications %}<article class="publication-record"><div><span class="platform-chip">{{ item.label }}</span><strong>{{ item.status_label }}</strong><small>{{ item.scheduled_at or 'Exécution immédiate' }} · {{ item.attempt_count }} tentative(s)</small></div>{% if item.dry_run %}<span class="tag">Simulation</span>{% endif %}{% if item.status == 'scheduled' %}<form method="post" action="{{ url_for('web.cancel_publication', job_id=publication.job.id, publication_id=item.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="button button-small button-secondary" type="submit">Annuler la programmation</button></form>{% elif item.status == 'needs_reconciliation' %}<form method="post" action="{{ url_for('web.reconcile_publication', job_id=publication.job.id, publication_id=item.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="button button-small button-secondary" type="submit">Réconcilier</button></form>{% endif %}{% if item.receipts %}<div class="receipt-list">{% for receipt in item.receipts %}<div><span aria-hidden="true">✓</span><p><strong>{{ receipt.status }}</strong><small>{{ receipt.published_at }} · {{ receipt.kind }} · Référence {{ receipt.remote_id }}</small>{% if receipt.remote_url %}<a href="{{ receipt.remote_url }}" rel="noopener noreferrer" target="_blank">Ouvrir la publication</a>{% endif %}</p></div>{% endfor %}</div>{% endif %}</article>{% endfor %}</div>{% else %}<div class="inline-empty"><p>Aucun ordre de publication n’a encore été créé.</p></div>{% endif %}
+</section>
+{% endblock %}

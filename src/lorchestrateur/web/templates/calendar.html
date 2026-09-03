@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Calendrier · L’Orchestrateur{% endblock %}
+{% block content %}
+<div class="page-heading"><p class="eyebrow">Planification réelle</p><h1>Calendrier</h1><p>Les dates proviennent exclusivement des demandes de publication persistées.</p></div>
+<section class="panel calendar-panel">
+  <div class="calendar-heading"><a class="button button-secondary" href="{{ url_for('web.publication_calendar', year=calendar_view.previous.year, month=calendar_view.previous.month) }}" aria-label="Mois précédent">←</a><h2>{{ calendar_view.month_name }} {{ calendar_view.year }}</h2><a class="button button-secondary" href="{{ url_for('web.publication_calendar', year=calendar_view.next.year, month=calendar_view.next.month) }}" aria-label="Mois suivant">→</a></div>
+  <div class="calendar-weekdays" aria-hidden="true"><span>Lun</span><span>Mar</span><span>Mer</span><span>Jeu</span><span>Ven</span><span>Sam</span><span>Dim</span></div>
+  <div class="calendar-grid">{% for week in calendar_view.weeks %}{% for day in week %}<div class="calendar-day {{ 'calendar-empty' if day == 0 }}">{% if day %}<strong>{{ day }}</strong>{% for event in calendar_view.events if event.day == day %}<a href="{{ url_for('web.publication_workspace', job_id=event.job.id) }}"><span>{{ event.time }} · {{ event.platform }}</span><small>{{ event.job.idea }}</small><small>{{ event.status }}</small></a>{% endfor %}{% endif %}</div>{% endfor %}{% endfor %}</div>
+  {% if not calendar_view.events %}<div class="inline-empty"><p>Aucune publication programmée ou enregistrée ce mois-ci.</p></div>{% endif %}
+</section>
+{% endblock %}

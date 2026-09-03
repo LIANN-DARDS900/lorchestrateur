@@ -1,0 +1,415 @@
+"""Environment-backed application configuration."""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from lorchestrateur.ai.contracts import ProviderCostClass
+
+
+class ConfigurationError(ValueError):
+    """Raised when configuration is present but invalid."""
+
+
+def _parse_bool(name: str, raw_value: str) -> bool:
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ConfigurationError(f"{name} must be a boolean value")
+
+
+def _parse_provider_order(raw_value: str) -> tuple[str, ...]:
+    providers = tuple(dict.fromkeys(item.strip() for item in raw_value.split(",") if item.strip()))
+    if not providers:
+        raise ConfigurationError("AI_PROVIDER_ORDER must contain at least one provider name")
+    return providers
+
+
+def _parse_quality_score(name: str, raw_value: str) -> int:
+    try:
+        value = int(raw_value.strip())
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be an integer") from exc
+    if not 0 <= value <= 100:
+        raise ConfigurationError(f"{name} must be between 0 and 100")
+    return value
+
+
+def _parse_timeout(name: str, raw_value: str) -> float:
+    try:
+        value = float(raw_value.strip())
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be numeric") from exc
+    if not 0 < value <= 300:
+        raise ConfigurationError(f"{name} must be between 0 and 300 seconds")
+    return value
+
+
+def _parse_retries(name: str, raw_value: str) -> int:
+    try:
+        value = int(raw_value.strip())
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be an integer") from exc
+    if not 0 <= value <= 5:
+        raise ConfigurationError(f"{name} must be between 0 and 5")
+    return value
+
+
+def _parse_positive_int(name: str, raw_value: str, *, maximum: int) -> int:
+    try:
+        value = int(raw_value.strip())
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be an integer") from exc
+    if not 1 <= value <= maximum:
+        raise ConfigurationError(f"{name} must be between 1 and {maximum}")
+    return value
+
+
+def _parse_minimum_sample_size(raw_value: str) -> int:
+    try:
+        value = int(raw_value.strip())
+    except ValueError as exc:
+        raise ConfigurationError("LEARNING_MIN_SAMPLE_SIZE must be an integer") from exc
+    if not 2 <= value <= 1000:
+        raise ConfigurationError("LEARNING_MIN_SAMPLE_SIZE must be between 2 and 1000")
+    return value
+
+
+def _parse_collection_offsets(raw_value: str) -> tuple[int, ...]:
+    try:
+        values = tuple(int(item.strip()) for item in raw_value.split(",") if item.strip())
+    except ValueError as exc:
+        raise ConfigurationError(
+            "ANALYTICS_COLLECTION_OFFSETS_HOURS must contain integers"
+        ) from exc
+    if not values or any(item < 0 or item > 8760 for item in values):
+        raise ConfigurationError(
+            "ANALYTICS_COLLECTION_OFFSETS_HOURS must contain values between 0 and 8760"
+        )
+    if tuple(sorted(set(values))) != values:
+        raise ConfigurationError("ANALYTICS_COLLECTION_OFFSETS_HOURS must be unique and increasing")
+    return values
+
+
+def _parse_timezone(name: str, raw_value: str) -> str:
+    value = raw_value.strip()
+    try:
+        ZoneInfo(value)
+    except ZoneInfoNotFoundError as exc:
+        raise ConfigurationError(f"{name} must be a valid IANA timezone") from exc
+    return value
+
+
+def _parse_cost_class(name: str, raw_value: str) -> ProviderCostClass:
+    try:
+        return ProviderCostClass(raw_value.strip().lower())
+    except ValueError as exc:
+        allowed = ", ".join(item.value for item in ProviderCostClass)
+        raise ConfigurationError(f"{name} must be one of: {allowed}") from exc
+
+
+def _optional_value(raw_value: str | None) -> str | None:
+    normalized = raw_value.strip() if raw_value else ""
+    return normalized or None
+
+
+def _parse_base_url(name: str, raw_value: str) -> str:
+    value = raw_value.strip().rstrip("/")
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.query or parsed.fragment:
+        raise ConfigurationError(f"{name} must be an HTTPS URL without query or fragment")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class Settings:
+    """Runtime settings; secret fields are excluded from the dataclass representation."""
+
+    app_env: str = "development"
+    log_level: str = "INFO"
+    database_url: str = "sqlite:///./data/lorchestrateur.db"
+    allow_paid_ai: bool = False
+    ai_provider_order: tuple[str, ...] = ("local", "gemini", "openrouter")
+    platform_min_quality_score: int = 80
+    app_ai_mode: str = "demo"
+    web_secret_key: str | None = field(default=None, repr=False)
+    web_host: str = "127.0.0.1"
+    web_port: int = 5000
+    gemini_api_key: str | None = field(default=None, repr=False)
+    gemini_model: str = ""
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    gemini_timeout_seconds: float = 30.0
+    gemini_max_retries: int = 2
+    gemini_cost_class: ProviderCostClass = ProviderCostClass.UNKNOWN
+    gemini_enabled: bool = True
+    openrouter_api_key: str | None = field(default=None, repr=False)
+    openrouter_model: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_timeout_seconds: float = 30.0
+    openrouter_max_retries: int = 2
+    openrouter_cost_class: ProviderCostClass = ProviderCostClass.UNKNOWN
+    openrouter_enabled: bool = True
+    publishing_enabled: bool = False
+    publishing_dry_run: bool = True
+    publishing_adapter_mode: str = "demo"
+    publishing_max_retries: int = 2
+    publishing_lease_seconds: int = 120
+    publishing_poll_seconds: int = 10
+    app_timezone: str = "Africa/Casablanca"
+    x_publishing_enabled: bool = False
+    x_access_token: str | None = field(default=None, repr=False)
+    x_api_base_url: str = "https://api.x.com"
+    facebook_publishing_enabled: bool = False
+    meta_page_access_token: str | None = field(default=None, repr=False)
+    meta_page_id: str | None = None
+    meta_graph_base_url: str = "https://graph.facebook.com/v23.0"
+    instagram_publishing_enabled: bool = False
+    instagram_access_token: str | None = field(default=None, repr=False)
+    instagram_business_account_id: str | None = None
+    blog_publishing_enabled: bool = False
+    blog_export_directory: str = "./data/exports"
+    analytics_enabled: bool = False
+    analytics_adapter_mode: str = "demo"
+    analytics_poll_seconds: int = 3600
+    analytics_timeout_seconds: float = 20.0
+    analytics_max_retries: int = 2
+    analytics_min_refresh_seconds: int = 300
+    analytics_stale_after_seconds: int = 7200
+    analytics_retention_days: int = 730
+    analytics_collection_offsets_hours: tuple[int, ...] = (1, 6, 24, 72, 168)
+    x_analytics_enabled: bool = False
+    x_analytics_bearer_token: str | None = field(default=None, repr=False)
+    meta_analytics_enabled: bool = False
+    meta_analytics_access_token: str | None = field(default=None, repr=False)
+    learning_enabled: bool = False
+    learning_mode: str = "demo"
+    learning_apply_enabled: bool = True
+    learning_min_sample_size: int = 5
+    learning_min_effect_percent: int = 15
+    learning_max_evidence_age_days: int = 365
+    learning_recommendation_ttl_days: int = 180
+    learning_window_tolerance_hours: int = 2
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
+        source = os.environ if environ is None else environ
+        app_env = source.get("APP_ENV", "development").strip()
+        log_level = source.get("LOG_LEVEL", "INFO").strip().upper()
+        database_url = source.get("DATABASE_URL", "sqlite:///./data/lorchestrateur.db").strip()
+
+        if not app_env:
+            raise ConfigurationError("APP_ENV cannot be empty")
+        if not database_url:
+            raise ConfigurationError("DATABASE_URL cannot be empty")
+        app_ai_mode = source.get("APP_AI_MODE", "demo").strip().lower()
+        if app_ai_mode not in {"demo", "real"}:
+            raise ConfigurationError("APP_AI_MODE must be demo or real")
+        publishing_adapter_mode = source.get("PUBLISHING_ADAPTER_MODE", "demo").strip().lower()
+        if publishing_adapter_mode not in {"demo", "real"}:
+            raise ConfigurationError("PUBLISHING_ADAPTER_MODE must be demo or real")
+        analytics_adapter_mode = source.get("ANALYTICS_ADAPTER_MODE", "demo").strip().lower()
+        if analytics_adapter_mode not in {"demo", "real"}:
+            raise ConfigurationError("ANALYTICS_ADAPTER_MODE must be demo or real")
+        learning_mode = source.get("LEARNING_MODE", "demo").strip().lower()
+        if learning_mode not in {"demo", "live"}:
+            raise ConfigurationError("LEARNING_MODE must be demo or live")
+        web_host = source.get("WEB_HOST", "127.0.0.1").strip()
+        if not web_host:
+            raise ConfigurationError("WEB_HOST cannot be empty")
+        try:
+            web_port = int(source.get("WEB_PORT", "5000").strip())
+        except ValueError as exc:
+            raise ConfigurationError("WEB_PORT must be an integer") from exc
+        if not 1 <= web_port <= 65535:
+            raise ConfigurationError("WEB_PORT must be between 1 and 65535")
+        blog_export_directory = source.get("BLOG_EXPORT_DIRECTORY", "./data/exports").strip()
+        if not blog_export_directory:
+            raise ConfigurationError("BLOG_EXPORT_DIRECTORY cannot be empty")
+
+        return cls(
+            app_env=app_env,
+            log_level=log_level,
+            database_url=database_url,
+            allow_paid_ai=_parse_bool("ALLOW_PAID_AI", source.get("ALLOW_PAID_AI", "false")),
+            ai_provider_order=_parse_provider_order(
+                source.get("AI_PROVIDER_ORDER", "local,gemini,openrouter")
+            ),
+            platform_min_quality_score=_parse_quality_score(
+                "PLATFORM_MIN_QUALITY_SCORE",
+                source.get("PLATFORM_MIN_QUALITY_SCORE", "80"),
+            ),
+            app_ai_mode=app_ai_mode,
+            web_secret_key=_optional_value(source.get("WEB_SECRET_KEY")),
+            web_host=web_host,
+            web_port=web_port,
+            gemini_api_key=_optional_value(source.get("GEMINI_API_KEY")),
+            gemini_model=source.get("GEMINI_MODEL", "").strip(),
+            gemini_base_url=_parse_base_url(
+                "GEMINI_BASE_URL",
+                source.get(
+                    "GEMINI_BASE_URL",
+                    "https://generativelanguage.googleapis.com/v1beta",
+                ),
+            ),
+            gemini_timeout_seconds=_parse_timeout(
+                "GEMINI_TIMEOUT_SECONDS", source.get("GEMINI_TIMEOUT_SECONDS", "30")
+            ),
+            gemini_max_retries=_parse_retries(
+                "GEMINI_MAX_RETRIES", source.get("GEMINI_MAX_RETRIES", "2")
+            ),
+            gemini_cost_class=_parse_cost_class(
+                "GEMINI_COST_CLASS", source.get("GEMINI_COST_CLASS", "unknown")
+            ),
+            gemini_enabled=_parse_bool("GEMINI_ENABLED", source.get("GEMINI_ENABLED", "true")),
+            openrouter_api_key=_optional_value(source.get("OPENROUTER_API_KEY")),
+            openrouter_model=source.get("OPENROUTER_MODEL", "").strip(),
+            openrouter_base_url=_parse_base_url(
+                "OPENROUTER_BASE_URL",
+                source.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            ),
+            openrouter_timeout_seconds=_parse_timeout(
+                "OPENROUTER_TIMEOUT_SECONDS",
+                source.get("OPENROUTER_TIMEOUT_SECONDS", "30"),
+            ),
+            openrouter_max_retries=_parse_retries(
+                "OPENROUTER_MAX_RETRIES", source.get("OPENROUTER_MAX_RETRIES", "2")
+            ),
+            openrouter_cost_class=_parse_cost_class(
+                "OPENROUTER_COST_CLASS",
+                source.get("OPENROUTER_COST_CLASS", "unknown"),
+            ),
+            openrouter_enabled=_parse_bool(
+                "OPENROUTER_ENABLED", source.get("OPENROUTER_ENABLED", "true")
+            ),
+            publishing_enabled=_parse_bool(
+                "PUBLISHING_ENABLED", source.get("PUBLISHING_ENABLED", "false")
+            ),
+            publishing_dry_run=_parse_bool(
+                "PUBLISHING_DRY_RUN", source.get("PUBLISHING_DRY_RUN", "true")
+            ),
+            publishing_adapter_mode=publishing_adapter_mode,
+            publishing_max_retries=_parse_retries(
+                "PUBLISHING_MAX_RETRIES", source.get("PUBLISHING_MAX_RETRIES", "2")
+            ),
+            publishing_lease_seconds=_parse_positive_int(
+                "PUBLISHING_LEASE_SECONDS",
+                source.get("PUBLISHING_LEASE_SECONDS", "120"),
+                maximum=3600,
+            ),
+            publishing_poll_seconds=_parse_positive_int(
+                "PUBLISHING_POLL_SECONDS",
+                source.get("PUBLISHING_POLL_SECONDS", "10"),
+                maximum=300,
+            ),
+            app_timezone=_parse_timezone(
+                "APP_TIMEZONE", source.get("APP_TIMEZONE", "Africa/Casablanca")
+            ),
+            x_publishing_enabled=_parse_bool(
+                "X_PUBLISHING_ENABLED", source.get("X_PUBLISHING_ENABLED", "false")
+            ),
+            x_access_token=_optional_value(source.get("X_ACCESS_TOKEN")),
+            x_api_base_url=_parse_base_url(
+                "X_API_BASE_URL", source.get("X_API_BASE_URL", "https://api.x.com")
+            ),
+            facebook_publishing_enabled=_parse_bool(
+                "FACEBOOK_PUBLISHING_ENABLED",
+                source.get("FACEBOOK_PUBLISHING_ENABLED", "false"),
+            ),
+            meta_page_access_token=_optional_value(source.get("META_PAGE_ACCESS_TOKEN")),
+            meta_page_id=_optional_value(source.get("META_PAGE_ID")),
+            meta_graph_base_url=_parse_base_url(
+                "META_GRAPH_BASE_URL",
+                source.get("META_GRAPH_BASE_URL", "https://graph.facebook.com/v23.0"),
+            ),
+            instagram_publishing_enabled=_parse_bool(
+                "INSTAGRAM_PUBLISHING_ENABLED",
+                source.get("INSTAGRAM_PUBLISHING_ENABLED", "false"),
+            ),
+            instagram_access_token=_optional_value(source.get("INSTAGRAM_ACCESS_TOKEN")),
+            instagram_business_account_id=_optional_value(
+                source.get("INSTAGRAM_BUSINESS_ACCOUNT_ID")
+            ),
+            blog_publishing_enabled=_parse_bool(
+                "BLOG_PUBLISHING_ENABLED",
+                source.get("BLOG_PUBLISHING_ENABLED", "false"),
+            ),
+            blog_export_directory=blog_export_directory,
+            analytics_enabled=_parse_bool(
+                "ANALYTICS_ENABLED", source.get("ANALYTICS_ENABLED", "false")
+            ),
+            analytics_adapter_mode=analytics_adapter_mode,
+            analytics_poll_seconds=_parse_positive_int(
+                "ANALYTICS_POLL_SECONDS",
+                source.get("ANALYTICS_POLL_SECONDS", "3600"),
+                maximum=86400,
+            ),
+            analytics_timeout_seconds=_parse_timeout(
+                "ANALYTICS_TIMEOUT_SECONDS",
+                source.get("ANALYTICS_TIMEOUT_SECONDS", "20"),
+            ),
+            analytics_max_retries=_parse_retries(
+                "ANALYTICS_MAX_RETRIES", source.get("ANALYTICS_MAX_RETRIES", "2")
+            ),
+            analytics_min_refresh_seconds=_parse_positive_int(
+                "ANALYTICS_MIN_REFRESH_SECONDS",
+                source.get("ANALYTICS_MIN_REFRESH_SECONDS", "300"),
+                maximum=86400,
+            ),
+            analytics_stale_after_seconds=_parse_positive_int(
+                "ANALYTICS_STALE_AFTER_SECONDS",
+                source.get("ANALYTICS_STALE_AFTER_SECONDS", "7200"),
+                maximum=2_592_000,
+            ),
+            analytics_retention_days=_parse_positive_int(
+                "ANALYTICS_RETENTION_DAYS",
+                source.get("ANALYTICS_RETENTION_DAYS", "730"),
+                maximum=3650,
+            ),
+            analytics_collection_offsets_hours=_parse_collection_offsets(
+                source.get("ANALYTICS_COLLECTION_OFFSETS_HOURS", "1,6,24,72,168")
+            ),
+            x_analytics_enabled=_parse_bool(
+                "X_ANALYTICS_ENABLED", source.get("X_ANALYTICS_ENABLED", "false")
+            ),
+            x_analytics_bearer_token=_optional_value(source.get("X_ANALYTICS_BEARER_TOKEN")),
+            meta_analytics_enabled=_parse_bool(
+                "META_ANALYTICS_ENABLED", source.get("META_ANALYTICS_ENABLED", "false")
+            ),
+            meta_analytics_access_token=_optional_value(source.get("META_ANALYTICS_ACCESS_TOKEN")),
+            learning_enabled=_parse_bool(
+                "LEARNING_ENABLED", source.get("LEARNING_ENABLED", "false")
+            ),
+            learning_mode=learning_mode,
+            learning_apply_enabled=_parse_bool(
+                "LEARNING_APPLY_ENABLED",
+                source.get("LEARNING_APPLY_ENABLED", "true"),
+            ),
+            learning_min_sample_size=_parse_minimum_sample_size(
+                source.get("LEARNING_MIN_SAMPLE_SIZE", "5")
+            ),
+            learning_min_effect_percent=_parse_quality_score(
+                "LEARNING_MIN_EFFECT_PERCENT",
+                source.get("LEARNING_MIN_EFFECT_PERCENT", "15"),
+            ),
+            learning_max_evidence_age_days=_parse_positive_int(
+                "LEARNING_MAX_EVIDENCE_AGE_DAYS",
+                source.get("LEARNING_MAX_EVIDENCE_AGE_DAYS", "365"),
+                maximum=3650,
+            ),
+            learning_recommendation_ttl_days=_parse_positive_int(
+                "LEARNING_RECOMMENDATION_TTL_DAYS",
+                source.get("LEARNING_RECOMMENDATION_TTL_DAYS", "180"),
+                maximum=3650,
+            ),
+            learning_window_tolerance_hours=_parse_positive_int(
+                "LEARNING_WINDOW_TOLERANCE_HOURS",
+                source.get("LEARNING_WINDOW_TOLERANCE_HOURS", "2"),
+                maximum=24,
+            ),
+        )
